@@ -2,14 +2,13 @@
 Tests for whitelist middleware behavior.
 """
 import os
-import pytest
+
+import aioredis
 from aiogram import Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
 
-import aioredis
-
-from src.bot.middlewares.whitelist import WhitelistMiddleware, WHITELIST_SET_KEY
+from src.bot.middlewares.whitelist import WHITELIST_SET_KEY, WhitelistMiddleware
 
 
 @pytest.mark.asyncio

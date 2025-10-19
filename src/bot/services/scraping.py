@@ -13,11 +13,10 @@ from typing import List, Tuple
 import aiohttp
 from aiolimiter import AsyncLimiter
 from PIL import Image
-
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 
 MAX_CONNECTIONS = 100

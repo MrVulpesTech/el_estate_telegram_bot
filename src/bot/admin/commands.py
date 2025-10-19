@@ -5,14 +5,13 @@ Admin commands: /admin, /allow, /allow_username, /allow_from_forward,
 
 import os
 
-import redis.asyncio as aioredis
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+import redis.asyncio as aioredis
 
 from ..services import stats as stats_service
-from .table_render import render_usage_tables, render_allowed_users
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from .table_render import render_allowed_users, render_usage_tables
 
 
 WHITELIST_SET_KEY = "whitelist:users"

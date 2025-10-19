@@ -6,9 +6,9 @@ Admins from `ADMIN_IDS` bypass restrictions.
 import os
 from typing import Set
 
-import redis.asyncio as aioredis
 from aiogram import BaseMiddleware
-from aiogram.types import Message, CallbackQuery, TelegramObject
+from aiogram.types import CallbackQuery, Message, TelegramObject
+import redis.asyncio as aioredis
 
 
 WHITELIST_SET_KEY = "whitelist:users"

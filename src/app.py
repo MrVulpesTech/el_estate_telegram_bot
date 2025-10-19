@@ -11,16 +11,15 @@ from contextlib import suppress
 from typing import Optional
 import signal
 
+from aiohttp import ClientSession, ClientTimeout, web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode as AiogramParseMode
-from aiogram.fsm.storage.redis import RedisStorage, DefaultKeyBuilder
-
+from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
 import redis.asyncio as aioredis
-from aiohttp import web, ClientSession, ClientTimeout
 
-from .bot.middlewares.whitelist import WhitelistMiddleware
 from .bot.admin.commands import setup_admin_router
+from .bot.middlewares.whitelist import WhitelistMiddleware
 from .bot.user.handlers import setup_user_router
 
 

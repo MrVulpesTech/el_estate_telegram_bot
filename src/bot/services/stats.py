@@ -1,6 +1,5 @@
 """
-File created: Stats service for daily/weekly counters with TTLs and queries.
-Provides increment and read helpers backed by Redis.
+Stats service for daily/weekly counters with TTLs and queries.
 """
 
 import datetime as _dt
