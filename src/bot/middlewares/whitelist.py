@@ -53,6 +53,12 @@ class WhitelistMiddleware(BaseMiddleware):
         if user_id is None:
             return await handler(event, data)
 
+        # Allow /start so the bot can capture username ↔ id mapping even before allow-listing
+        if isinstance(event, Message):
+            text = event.text or ""
+            if text.startswith("/start"):
+                return await handler(event, data)
+
         if await self._is_allowed(user_id):
             return await handler(event, data)
 
