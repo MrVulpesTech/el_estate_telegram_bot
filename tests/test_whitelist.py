@@ -4,7 +4,7 @@ Tests for whitelist middleware behavior.
 
 import os
 
-import aioredis
+import redis.asyncio as aioredis
 import pytest
 from aiogram import Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
