@@ -1,14 +1,14 @@
 [tool.black]
-line-length = 100
+line-length = 88
 target-version = ["py312"]
-extend-exclude = "old|logs|images"
 
 [tool.isort]
 profile = "black"
-line_length = 100
-skip_glob = ["old/**", "logs/**", "images/**"]
 
 [tool.ruff]
-line-length = 100
-extend-exclude = ["old", "logs", "images"]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
 
