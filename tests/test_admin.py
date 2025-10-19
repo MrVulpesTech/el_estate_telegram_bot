@@ -1,8 +1,6 @@
 """
-File created: Tests for admin stats rendering utilities.
+Tests for admin stats rendering utilities.
 """
-
-import pytest
 
 from src.bot.admin.table_render import render_usage_tables
 

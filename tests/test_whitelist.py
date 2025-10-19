@@ -1,13 +1,9 @@
 """
-File created: Tests for whitelist middleware behavior.
+Tests for whitelist middleware behavior.
 """
-
-import asyncio
 import os
 import pytest
-from aiogram import Dispatcher, Bot
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode as AiogramParseMode
+from aiogram import Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
 
@@ -24,8 +20,6 @@ async def test_non_whitelisted_user_is_blocked(monkeypatch):
 
     dp = Dispatcher(storage=MemoryStorage())
     dp.message.middleware.register(WhitelistMiddleware(redis))
-
-    bot = Bot(token="test:token", default=DefaultBotProperties(parse_mode=AiogramParseMode.HTML))
 
     async def dummy_handler(message: Message, **kwargs):  # should not be called
         assert False, "Handler should not be called for non-whitelisted user"

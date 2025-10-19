@@ -4,7 +4,7 @@ Admins from `ADMIN_IDS` bypass restrictions.
 """
 
 import os
-from typing import Iterable, Set
+from typing import Set
 
 import redis.asyncio as aioredis
 from aiogram import BaseMiddleware

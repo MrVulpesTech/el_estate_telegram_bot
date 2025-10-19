@@ -4,7 +4,6 @@ Admin commands: /admin, /allow, /allow_username, /allow_from_forward,
 """
 
 import os
-from typing import Dict, Tuple
 
 import redis.asyncio as aioredis
 from aiogram import Router
