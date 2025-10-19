@@ -1,9 +1,11 @@
 """
 Tests for whitelist middleware behavior.
 """
+
 import os
 
 import aioredis
+import pytest
 from aiogram import Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
@@ -43,5 +45,3 @@ async def test_whitelisted_user_is_allowed(monkeypatch):
     allowed = await redis.sismember(WHITELIST_SET_KEY, "123")
     assert allowed
     await redis.close()
-
-

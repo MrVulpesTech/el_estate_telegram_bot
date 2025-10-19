@@ -7,7 +7,6 @@ from typing import Dict, List, Tuple
 
 import redis.asyncio as aioredis
 
-
 DAILY_TTL_DAYS = 35
 WEEKLY_TTL_DAYS = 180
 
@@ -48,7 +47,9 @@ async def get_weekly(redis: aioredis.Redis) -> Dict[str, int]:
     return {k: int(v) for k, v in data.items()} if data else {}
 
 
-def rank(items: Dict[str, int], usernames: Dict[str, str] | None = None) -> List[Tuple[str, int]]:
+def rank(
+    items: Dict[str, int], usernames: Dict[str, str] | None = None
+) -> List[Tuple[str, int]]:
     # Returns list of (display_name, count) sorted desc by count
     pairs = list(items.items())
     pairs.sort(key=lambda kv: kv[1], reverse=True)
@@ -57,5 +58,3 @@ def rank(items: Dict[str, int], usernames: Dict[str, str] | None = None) -> List
         label = usernames.get(user_id, user_id) if usernames else user_id
         out.append((label, count))
     return out
-
-

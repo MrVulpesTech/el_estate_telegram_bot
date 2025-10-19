@@ -38,7 +38,7 @@ def render_allowed_users(rows: Iterable[Tuple[str, str | None, str | None]]) -> 
         uname = uname or "-"
         full_name = full_name or "-"
         id_cell = f"<code>{uid}</code>"
-        lines.append(f"{i:<2} {id_cell}  {uname.ljust(nick_width)}  {full_name.ljust(full_width)}")
+        lines.append(
+            f"{i:<2} {id_cell}  {uname.ljust(nick_width)}  {full_name.ljust(full_width)}"
+        )
     return "\n".join(lines)
-
-

@@ -4,24 +4,23 @@ structured logging, health endpoint, routers, and graceful shutdown.
 """
 
 import asyncio
+import json
 import logging
 import os
-import json
+import signal
 from contextlib import suppress
 from typing import Optional
-import signal
 
-from aiohttp import ClientSession, ClientTimeout, web
+import redis.asyncio as aioredis
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode as AiogramParseMode
 from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
-import redis.asyncio as aioredis
+from aiohttp import ClientSession, ClientTimeout, web
 
 from .bot.admin.commands import setup_admin_router
 from .bot.middlewares.whitelist import WhitelistMiddleware
 from .bot.user.handlers import setup_user_router
-
 
 BOT_TOKEN_ENV = "BOT_TOKEN"
 REDIS_URL_ENV = "REDIS_URL"
@@ -58,7 +57,9 @@ async def _redis_ok(redis: aioredis.Redis) -> bool:
         return False
 
 
-async def create_health_app(redis: aioredis.Redis, selenium_url: Optional[str]) -> web.Application:
+async def create_health_app(
+    redis: aioredis.Redis, selenium_url: Optional[str]
+) -> web.Application:
     app = web.Application()
 
     async def healthz(_request: web.Request) -> web.Response:
@@ -126,7 +127,9 @@ async def start() -> None:
     key_builder = DefaultKeyBuilder(prefix=REDIS_KEY_PREFIX)
     storage = RedisStorage(redis=redis, key_builder=key_builder)
 
-    bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=AiogramParseMode.HTML))
+    bot = Bot(
+        token=bot_token, default=DefaultBotProperties(parse_mode=AiogramParseMode.HTML)
+    )
     dp = Dispatcher(storage=storage)
 
     # Middlewares
@@ -151,7 +154,9 @@ async def start() -> None:
     shutdown_event: asyncio.Event = asyncio.Event()
 
     def _handle_signal(name: str) -> None:
-        logging.getLogger(__name__).info(json.dumps({"signal": name, "event": "shutdown"}))
+        logging.getLogger(__name__).info(
+            json.dumps({"signal": name, "event": "shutdown"})
+        )
         try:
             shutdown_event.set()
         except Exception:
@@ -186,5 +191,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

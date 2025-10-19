@@ -18,7 +18,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-
 MAX_CONNECTIONS = 100
 DEFAULT_CROP_PERCENTAGE = 15
 RATE_LIMIT_RPS = int(os.getenv("RATE_LIMIT_RPS", "5"))
@@ -27,7 +26,9 @@ _limiter = AsyncLimiter(RATE_LIMIT_RPS, time_period=1)
 _executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=10)
 
 
-def _remove_watermark(image_path: str, output_path: str, crop_percent: int = DEFAULT_CROP_PERCENTAGE) -> None:
+def _remove_watermark(
+    image_path: str, output_path: str, crop_percent: int = DEFAULT_CROP_PERCENTAGE
+) -> None:
     img = Image.open(image_path)
     width, height = img.size
     new_height = int(height * (100 - crop_percent) / 100)
@@ -54,7 +55,9 @@ def _browser_scrape(url: str, selenium_url: str) -> List[str]:
         # Try dismissing cookie consent but do not fail if not present
         try:
             WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((By.XPATH, "//div[contains(text(),'Прийняти всі')]"))
+                EC.element_to_be_clickable(
+                    (By.XPATH, "//div[contains(text(),'Прийняти всі')]")
+                )
             ).click()
         except Exception:
             pass
@@ -63,9 +66,13 @@ def _browser_scrape(url: str, selenium_url: str) -> List[str]:
         if "otodom" in url:
             try:
                 WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='carousel-container']"))
+                    EC.presence_of_element_located(
+                        (By.CSS_SELECTOR, "[data-testid='carousel-container']")
+                    )
                 )
-                carousel = driver.find_element(By.CSS_SELECTOR, "[data-testid='carousel-container']")
+                carousel = driver.find_element(
+                    By.CSS_SELECTOR, "[data-testid='carousel-container']"
+                )
                 for img in carousel.find_elements(By.TAG_NAME, "img"):
                     src = img.get_attribute("src")
                     if not src:
@@ -134,18 +141,22 @@ async def scrape_images(
     os.makedirs(user_dir, exist_ok=True)
 
     loop = asyncio.get_running_loop()
-    image_urls = await loop.run_in_executor(_executor, _browser_scrape, url, selenium_url)
+    image_urls = await loop.run_in_executor(
+        _executor, _browser_scrape, url, selenium_url
+    )
     if not image_urls:
         return [], user_dir
 
-    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=MAX_CONNECTIONS)) as session:
+    async with aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(limit=MAX_CONNECTIONS)
+    ) as session:
         tasks = [
-            asyncio.create_task(_process_image(session, img_url, i, user_dir, crop_percent))
+            asyncio.create_task(
+                _process_image(session, img_url, i, user_dir, crop_percent)
+            )
             for i, img_url in enumerate(image_urls)
         ]
         processed = await asyncio.gather(*tasks)
 
     valid = [p for p in processed if p]
     return valid, user_dir
-
-

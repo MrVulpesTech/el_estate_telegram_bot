@@ -5,14 +5,18 @@ Admin commands: /admin, /allow, /allow_username, /allow_from_forward,
 
 import os
 
+import redis.asyncio as aioredis
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-import redis.asyncio as aioredis
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from ..services import stats as stats_service
 from .table_render import render_allowed_users, render_usage_tables
-
 
 WHITELIST_SET_KEY = "whitelist:users"
 
@@ -43,7 +47,16 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         if not message.from_user or not _is_admin(message.from_user.id):
             return
         kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="👥 Дозволені", callback_data="admin:allowed"), InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")]]
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="👥 Дозволені", callback_data="admin:allowed"
+                    ),
+                    InlineKeyboardButton(
+                        text="📊 Статистика", callback_data="admin:stats"
+                    ),
+                ]
+            ]
         )
         await message.answer(
             "Адмін команди:\n"
@@ -53,8 +66,9 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
             "<code>/deny id</code> — видалити з білого списку\n"
             "/allowed — показати дозволених користувачів\n"
             "/stats — показати статистику\n"
-            "<code>/setname id Повне Імʼя</code> — вручну змінити імʼя"
-        , reply_markup=kb)
+            "<code>/setname id Повне Імʼя</code> — вручну змінити імʼя",
+            reply_markup=kb,
+        )
 
     @router.message(Command("allow"))
     async def allow(message: Message) -> None:
@@ -136,7 +150,10 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         await redis.set(f"admin:await_forward:{admin_id}", "1", ex=300)
         await message.answer("Перешліть повідомлення від користувача, щоб додати його")
 
-    @router.message(lambda m: (m.forward_from is not None) or (getattr(m, "forward_origin", None) is not None))
+    @router.message(
+        lambda m: (m.forward_from is not None)
+        or (getattr(m, "forward_origin", None) is not None)
+    )
     async def handle_forward_allow(message: Message) -> None:
         # Only proceed if admin is awaiting a forward
         if not message.from_user or not _is_admin(message.from_user.id):
@@ -175,7 +192,7 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         if uname:
             await redis.set(f"username_to_id:{uname}", str(uid), ex=30 * 24 * 3600)
             await redis.set(f"id_to_username:{uid}", uname, ex=30 * 24 * 3600)
-        if 'full_name' in locals() and full_name:
+        if "full_name" in locals() and full_name:
             await redis.set(f"id_to_fullname:{uid}", full_name, ex=30 * 24 * 3600)
         await message.answer(f"Додано {uid} до білого списку")
 
@@ -255,5 +272,3 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         await message.answer("Імʼя оновлено")
 
     return router
-
-

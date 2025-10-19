@@ -15,5 +15,3 @@ def test_render_usage_tables_formats_columns():
     # Ensure counts are present and right-aligned area exists (simple check)
     assert "  12" in text
     assert "  54" in text
-
-

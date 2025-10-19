@@ -3,14 +3,18 @@ User commands and URL processing handlers.
 Includes /start, /crop, /retry, URL handler; uses scraping service and stats.
 """
 
-import os
 import asyncio
-import time
 import json
+import os
 import shutil
+import time
 
+import redis.asyncio as aioredis
 from aiogram import Router
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     FSInputFile,
@@ -19,15 +23,9 @@ from aiogram.types import (
     InputMediaPhoto,
     Message,
 )
-from aiogram.exceptions import TelegramRetryAfter
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 
-import redis.asyncio as aioredis
-
-from ..services.scraping import scrape_images
 from ..services import stats as stats_service
-
+from ..services.scraping import scrape_images
 
 DEFAULT_CROP_PERCENTAGE = 15
 
@@ -45,7 +43,9 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
         return json.loads(raw) if raw else {}
 
     async def _save_user_data(user_id: int, data: dict) -> None:
-        await redis.set(f"el_estate_bot:user:{user_id}", json.dumps(data), ex=30 * 24 * 3600)
+        await redis.set(
+            f"el_estate_bot:user:{user_id}", json.dumps(data), ex=30 * 24 * 3600
+        )
 
     @router.message(Command("start"))
     async def cmd_start(message: Message, state: FSMContext) -> None:
@@ -55,13 +55,25 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
             user = message.from_user
             if user:
                 uid = user.id
-                uname = ("@" + user.username.lower()) if getattr(user, "username", None) else None
-                full_name = (user.full_name or None) if getattr(user, "full_name", None) else None
+                uname = (
+                    ("@" + user.username.lower())
+                    if getattr(user, "username", None)
+                    else None
+                )
+                full_name = (
+                    (user.full_name or None)
+                    if getattr(user, "full_name", None)
+                    else None
+                )
                 if uname:
-                    await redis.set(f"username_to_id:{uname}", str(uid), ex=30 * 24 * 3600)
+                    await redis.set(
+                        f"username_to_id:{uname}", str(uid), ex=30 * 24 * 3600
+                    )
                     await redis.set(f"id_to_username:{uid}", uname, ex=30 * 24 * 3600)
                 if full_name:
-                    await redis.set(f"id_to_fullname:{uid}", full_name, ex=30 * 24 * 3600)
+                    await redis.set(
+                        f"id_to_fullname:{uid}", full_name, ex=30 * 24 * 3600
+                    )
         except Exception:
             pass
         await message.answer(
@@ -119,13 +131,23 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
         # Refresh mapping on any interaction
         try:
             user = message.from_user
-            uname = ("@" + user.username.lower()) if getattr(user, "username", None) else None
-            full_name = (user.full_name or None) if getattr(user, "full_name", None) else None
+            uname = (
+                ("@" + user.username.lower())
+                if getattr(user, "username", None)
+                else None
+            )
+            full_name = (
+                (user.full_name or None) if getattr(user, "full_name", None) else None
+            )
             if uname:
-                await redis.set(f"username_to_id:{uname}", str(user_id), ex=30 * 24 * 3600)
+                await redis.set(
+                    f"username_to_id:{uname}", str(user_id), ex=30 * 24 * 3600
+                )
                 await redis.set(f"id_to_username:{user_id}", uname, ex=30 * 24 * 3600)
             if full_name:
-                await redis.set(f"id_to_fullname:{user_id}", full_name, ex=30 * 24 * 3600)
+                await redis.set(
+                    f"id_to_fullname:{user_id}", full_name, ex=30 * 24 * 3600
+                )
         except Exception:
             pass
         await state.set_state(UserState.processing_url)
@@ -134,7 +156,9 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
         selenium_url = os.getenv("SELENIUM_URL", "http://localhost:4444/wd/hub")
 
         status = await message.answer("Збираю зображення, зачекайте…")
-        images, user_dir = await scrape_images(url, user_id, selenium_url, crop_percent=crop)
+        images, user_dir = await scrape_images(
+            url, user_id, selenium_url, crop_percent=crop
+        )
 
         if images:
             # Increment stats on success
@@ -147,7 +171,9 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
                 attempt = 0
                 while attempt < retries:
                     try:
-                        await message.bot.send_media_group(chat_id=message.chat.id, media=media)
+                        await message.bot.send_media_group(
+                            chat_id=message.chat.id, media=media
+                        )
                         break
                     except TelegramRetryAfter as e:
                         attempt += 1
@@ -156,10 +182,19 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
                         attempt += 1
                         await asyncio.sleep(3)
             await status.edit_text(f"✅ Готово. Надіслано {len(images)} зображень.")
-            data.update({"last_url": url, "last_images_count": len(images), "last_processed_time": int(time.time()), "crop_percentage": crop})
+            data.update(
+                {
+                    "last_url": url,
+                    "last_images_count": len(images),
+                    "last_processed_time": int(time.time()),
+                    "crop_percentage": crop,
+                }
+            )
             await _save_user_data(user_id, data)
         else:
-            await status.edit_text("❌ Не вдалося знайти зображення для цього посилання.")
+            await status.edit_text(
+                "❌ Не вдалося знайти зображення для цього посилання."
+            )
             await state.set_state(UserState.waiting_for_url)
 
         # Cleanup user directory to free disk space
@@ -186,11 +221,16 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
         await callback.message.edit_text(
             f"Поточна обрізка знизу: {value}%",
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="0%", callback_data="set_crop:0"), InlineKeyboardButton(text="5%", callback_data="set_crop:5"), InlineKeyboardButton(text="10%", callback_data="set_crop:10"), InlineKeyboardButton(text="15%", callback_data="set_crop:15")]]
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="0%", callback_data="set_crop:0"),
+                        InlineKeyboardButton(text="5%", callback_data="set_crop:5"),
+                        InlineKeyboardButton(text="10%", callback_data="set_crop:10"),
+                        InlineKeyboardButton(text="15%", callback_data="set_crop:15"),
+                    ]
+                ]
             ),
         )
         await callback.answer("Оновлено")
 
     return router
-
-

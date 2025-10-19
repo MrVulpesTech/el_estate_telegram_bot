@@ -6,10 +6,9 @@ Admins from `ADMIN_IDS` bypass restrictions.
 import os
 from typing import Set
 
+import redis.asyncio as aioredis
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
-import redis.asyncio as aioredis
-
 
 WHITELIST_SET_KEY = "whitelist:users"
 
@@ -58,7 +57,7 @@ class WhitelistMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         if isinstance(event, Message):
-            await event.answer("Доступ обмежено. Зверніться до адміністратора для внесення до білого списку.")
+            await event.answer(
+                "Доступ обмежено. Зверніться до адміністратора для внесення до білого списку."
+            )
         return None
-
-
