@@ -1,0 +1,14 @@
+# Local and generated artifacts
+__pycache__/
+.venv/
+.cursor/
+.env
+.DS_Store
+
+# Project-specific
+old/
+logs/
+images/
+PLAN.md
+TASK.md
+

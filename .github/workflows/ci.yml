@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  lint-test-build:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff black isort pytest pytest-asyncio pytest-cov
+          pip install -r requirements.txt
+      - name: Lint
+        run: |
+          ruff check .
+          black --check .
+          isort --check-only .
+      - name: Tests
+        env:
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          pytest -q
+      - name: Build image
+        run: |
+          docker build -t el-estate-bot:ci .
+

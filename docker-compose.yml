@@ -1,0 +1,30 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+  selenium:
+    image: selenium/standalone-chrome:latest
+    shm_size: "2g"
+    ports:
+      - "4444:4444"
+  bot:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - ADMIN_IDS=${ADMIN_IDS}
+      - REDIS_URL=${REDIS_URL}
+      - SELENIUM_URL=${SELENIUM_URL}
+      - RATE_LIMIT_RPS=${RATE_LIMIT_RPS}
+      - HEALTH_PORT=8080
+    volumes:
+      - ./images:/app/images
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+      - selenium
+    ports:
+      - "8080:8080"
+

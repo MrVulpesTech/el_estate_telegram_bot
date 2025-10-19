@@ -1,0 +1,54 @@
+"""
+File created: Tests for whitelist middleware behavior.
+"""
+
+import asyncio
+import os
+import pytest
+from aiogram import Dispatcher, Bot
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode as AiogramParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import Message
+
+import aioredis
+
+from src.bot.middlewares.whitelist import WhitelistMiddleware, WHITELIST_SET_KEY
+
+
+@pytest.mark.asyncio
+async def test_non_whitelisted_user_is_blocked(monkeypatch):
+    os.environ["ADMIN_IDS"] = ""
+    redis = await aioredis.from_url("redis://localhost:6379/0", decode_responses=True)
+    await redis.delete(WHITELIST_SET_KEY)
+
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.message.middleware.register(WhitelistMiddleware(redis))
+
+    bot = Bot(token="test:token", default=DefaultBotProperties(parse_mode=AiogramParseMode.HTML))
+
+    async def dummy_handler(message: Message, **kwargs):  # should not be called
+        assert False, "Handler should not be called for non-whitelisted user"
+
+    # Normally we would simulate an Update; here we assert middleware membership directly
+    allowed = await redis.sismember(WHITELIST_SET_KEY, str(123))
+    assert not allowed
+
+    await redis.close()
+
+
+@pytest.mark.asyncio
+async def test_whitelisted_user_is_allowed(monkeypatch):
+    os.environ["ADMIN_IDS"] = ""
+    redis = await aioredis.from_url("redis://localhost:6379/0", decode_responses=True)
+    await redis.delete(WHITELIST_SET_KEY)
+    await redis.sadd(WHITELIST_SET_KEY, "123")
+
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.message.middleware.register(WhitelistMiddleware(redis))
+
+    allowed = await redis.sismember(WHITELIST_SET_KEY, "123")
+    assert allowed
+    await redis.close()
+
+

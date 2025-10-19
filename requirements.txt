@@ -1,0 +1,8 @@
+aiogram
+aiohttp
+Pillow
+selenium
+aioredis
+aiolimiter
+redis
+
