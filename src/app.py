@@ -75,7 +75,11 @@ async def create_health_app(
             status=status,
         )
 
+    async def root(_request: web.Request) -> web.Response:
+        return web.json_response({"ok": True, "service": "el-estate-bot"})
+
     app.router.add_get("/healthz", healthz)
+    app.router.add_get("/", root)
     return app
 
 

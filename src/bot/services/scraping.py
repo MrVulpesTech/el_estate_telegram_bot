@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import List, Tuple
 
+import logging
 import aiohttp
 from aiolimiter import AsyncLimiter
 from PIL import Image
@@ -17,6 +18,8 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import WebDriverException
+from aiohttp import ClientTimeout
 
 MAX_CONNECTIONS = 100
 DEFAULT_CROP_PERCENTAGE = 15
@@ -25,6 +28,7 @@ _limiter = AsyncLimiter(RATE_LIMIT_RPS, time_period=1)
 
 _executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=10)
 
+logger = logging.getLogger(__name__)
 
 def _remove_watermark(
     image_path: str, output_path: str, crop_percent: int = DEFAULT_CROP_PERCENTAGE
@@ -50,6 +54,10 @@ def _browser_scrape(url: str, selenium_url: str) -> List[str]:
         )
 
         driver = webdriver.Remote(command_executor=selenium_url, options=options)
+        try:
+            driver.set_page_load_timeout(15)
+        except Exception:
+            pass
         driver.get(url)
 
         # Try dismissing cookie consent but do not fail if not present
@@ -60,12 +68,12 @@ def _browser_scrape(url: str, selenium_url: str) -> List[str]:
                 )
             ).click()
         except Exception:
-            pass
+            logger.debug("cookies.dismiss.missing url=%s", url)
 
         image_urls: List[str] = []
         if "otodom" in url:
             try:
-                WebDriverWait(driver, 10).until(
+                WebDriverWait(driver, 8).until(
                     EC.presence_of_element_located(
                         (By.CSS_SELECTOR, "[data-testid='carousel-container']")
                     )
@@ -80,11 +88,11 @@ def _browser_scrape(url: str, selenium_url: str) -> List[str]:
                     if "/image;" in src:
                         src = src.split("/image;")[0] + "/image;"
                     image_urls.append(src)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("otodom.extract.error url=%s err=%s", url, e)
         elif "olx" in url:
             try:
-                WebDriverWait(driver, 10).until(
+                WebDriverWait(driver, 8).until(
                     EC.presence_of_element_located((By.CLASS_NAME, "swiper-slide"))
                 )
                 for div in driver.find_elements(By.CLASS_NAME, "swiper-slide"):
@@ -95,20 +103,29 @@ def _browser_scrape(url: str, selenium_url: str) -> List[str]:
                             image_urls.append(src)
                     except Exception:
                         continue
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("olx.extract.error url=%s err=%s", url, e)
 
         return image_urls
     finally:
         if driver:
-            driver.quit()
+            try:
+                driver.quit()
+            except WebDriverException:
+                logger.warning("browser.quit.error url=%s", url)
 
 
 async def _fetch_image(session: aiohttp.ClientSession, url: str) -> bytes:
     async with _limiter:
-        async with session.get(url) as resp:
-            if resp.status == 200:
-                return await resp.read()
+        try:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+                logger.warning("image.fetch.non200 status=%d url=%s", resp.status, url)
+        except asyncio.TimeoutError:
+            logger.error("image.fetch.timeout url=%s", url)
+        except Exception as e:
+            logger.error("image.fetch.error url=%s err=%s", url, e)
     return b""
 
 
@@ -136,7 +153,7 @@ async def scrape_images(
     *,
     crop_percent: int = DEFAULT_CROP_PERCENTAGE,
 ) -> Tuple[List[str], str]:
-    # Create per-user temp directory
+    logger.info("scrape.start user_id=%s url=%s crop_percent=%d", user_id, url, crop_percent)
     user_dir = f"images/{user_id}_{int(time.time())}"
     os.makedirs(user_dir, exist_ok=True)
 
@@ -145,10 +162,12 @@ async def scrape_images(
         _executor, _browser_scrape, url, selenium_url
     )
     if not image_urls:
+        logger.warning("scrape.no_images user_id=%s url=%s", user_id, url)
         return [], user_dir
 
     async with aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(limit=MAX_CONNECTIONS)
+        connector=aiohttp.TCPConnector(limit=MAX_CONNECTIONS),
+        timeout=ClientTimeout(total=20, connect=5),
     ) as session:
         tasks = [
             asyncio.create_task(
@@ -159,4 +178,11 @@ async def scrape_images(
         processed = await asyncio.gather(*tasks)
 
     valid = [p for p in processed if p]
+    logger.info(
+        "scrape.done user_id=%s url=%s processed=%d/%d",
+        user_id,
+        url,
+        len(valid),
+        len(image_urls),
+    )
     return valid, user_dir
