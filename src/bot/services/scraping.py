@@ -26,6 +26,11 @@ DEFAULT_CROP_PERCENTAGE = 15
 RATE_LIMIT_RPS = int(os.getenv("RATE_LIMIT_RPS", "5"))
 _limiter = AsyncLimiter(RATE_LIMIT_RPS, time_period=1)
 
+SCRAPE_RETRIES = int(os.getenv("SCRAPE_RETRIES", "2"))
+SCRAPE_RETRY_BACKOFF_S = float(os.getenv("SCRAPE_RETRY_BACKOFF_S", "2.0"))
+IMAGE_FETCH_RETRIES = int(os.getenv("IMAGE_FETCH_RETRIES", "2"))
+IMAGE_FETCH_RETRY_BACKOFF_S = float(os.getenv("IMAGE_FETCH_RETRY_BACKOFF_S", "1.0"))
+
 _executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=10)
 
 logger = logging.getLogger(__name__)
@@ -115,17 +120,65 @@ def _browser_scrape(url: str, selenium_url: str) -> List[str]:
                 logger.warning("browser.quit.error url=%s", url)
 
 
-async def _fetch_image(session: aiohttp.ClientSession, url: str) -> bytes:
-    async with _limiter:
+def _browser_scrape_with_retry(url: str, selenium_url: str) -> List[str]:
+    # Retry when extraction fails or returns no images
+    last_exception: Exception | None = None
+    for attempt in range(1, SCRAPE_RETRIES + 2):  # N retries means N+1 total attempts
         try:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    return await resp.read()
-                logger.warning("image.fetch.non200 status=%d url=%s", resp.status, url)
-        except asyncio.TimeoutError:
-            logger.error("image.fetch.timeout url=%s", url)
+            images = _browser_scrape(url, selenium_url)
+            if images:
+                if attempt > 1:
+                    logger.info(
+                        "extract.recovered url=%s attempts=%d", url, attempt
+                    )
+                return images
         except Exception as e:
-            logger.error("image.fetch.error url=%s err=%s", url, e)
+            last_exception = e
+            logger.warning(
+                "extract.attempt.error url=%s attempt=%d/%d err=%s",
+                url,
+                attempt,
+                SCRAPE_RETRIES + 1,
+                e,
+            )
+        if attempt <= SCRAPE_RETRIES:
+            time.sleep(SCRAPE_RETRY_BACKOFF_S * attempt)
+    if last_exception:
+        logger.warning("extract.failed url=%s err=%s", url, last_exception)
+    return []
+
+
+async def _fetch_image(session: aiohttp.ClientSession, url: str) -> bytes:
+    for attempt in range(1, IMAGE_FETCH_RETRIES + 2):
+        async with _limiter:
+            try:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        return await resp.read()
+                    logger.warning(
+                        "image.fetch.non200 status=%d url=%s attempt=%d/%d",
+                        resp.status,
+                        url,
+                        attempt,
+                        IMAGE_FETCH_RETRIES + 1,
+                    )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "image.fetch.timeout url=%s attempt=%d/%d",
+                    url,
+                    attempt,
+                    IMAGE_FETCH_RETRIES + 1,
+                )
+            except Exception as e:
+                logger.error(
+                    "image.fetch.error url=%s err=%s attempt=%d/%d",
+                    url,
+                    e,
+                    attempt,
+                    IMAGE_FETCH_RETRIES + 1,
+                )
+        if attempt <= IMAGE_FETCH_RETRIES:
+            await asyncio.sleep(IMAGE_FETCH_RETRY_BACKOFF_S * attempt)
     return b""
 
 
@@ -159,7 +212,7 @@ async def scrape_images(
 
     loop = asyncio.get_running_loop()
     image_urls = await loop.run_in_executor(
-        _executor, _browser_scrape, url, selenium_url
+        _executor, _browser_scrape_with_retry, url, selenium_url
     )
     if not image_urls:
         logger.warning("scrape.no_images user_id=%s url=%s", user_id, url)
