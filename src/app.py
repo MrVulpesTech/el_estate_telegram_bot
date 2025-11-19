@@ -16,7 +16,9 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode as AiogramParseMode
 from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiohttp import ClientSession, ClientTimeout, web
+from redis.exceptions import ReadOnlyError, ResponseError
 
 from .bot.admin.commands import setup_admin_router
 from .bot.middlewares.whitelist import WhitelistMiddleware
@@ -54,6 +56,20 @@ async def _redis_ok(redis: aioredis.Redis) -> bool:
         pong = await redis.ping()
         return bool(pong)
     except Exception:
+        return False
+
+
+async def _redis_is_writable(redis: aioredis.Redis) -> bool:
+    """Checks whether SET works. Some providers expose read-only replicas."""
+    try:
+        key = f"{REDIS_KEY_PREFIX}:writetest"
+        # ex=5 to avoid leaving junk keys around
+        await redis.set(key, "1", ex=5)
+        return True
+    except (ReadOnlyError, ResponseError):
+        return False
+    except Exception:
+        # If anything else happens, consider it not writable to be safe
         return False
 
 
@@ -129,7 +145,13 @@ async def start() -> None:
     redis = await _init_redis(redis_url)
 
     key_builder = DefaultKeyBuilder(prefix=REDIS_KEY_PREFIX)
-    storage = RedisStorage(redis=redis, key_builder=key_builder)
+    if await _redis_is_writable(redis):
+        storage = RedisStorage(redis=redis, key_builder=key_builder)
+    else:
+        logging.getLogger(__name__).error(
+            "redis.readonly detected; using MemoryStorage for FSM"
+        )
+        storage = MemoryStorage()
 
     bot = Bot(
         token=bot_token, default=DefaultBotProperties(parse_mode=AiogramParseMode.HTML)
