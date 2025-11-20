@@ -6,6 +6,7 @@ import datetime as _dt
 from typing import Dict, List, Tuple
 
 import redis.asyncio as aioredis
+from redis.exceptions import ReadOnlyError, ResponseError
 
 DAILY_TTL_DAYS = 35
 WEEKLY_TTL_DAYS = 180
@@ -27,12 +28,18 @@ async def increment(redis: aioredis.Redis, user_id: int) -> None:
     weekly_key = _week_key()
 
     # Daily
-    await redis.hincrby(daily_key, str(user_id), 1)
-    await redis.expire(daily_key, DAILY_TTL_DAYS * 24 * 3600)
+    try:
+        await redis.hincrby(daily_key, str(user_id), 1)
+        await redis.expire(daily_key, DAILY_TTL_DAYS * 24 * 3600)
+    except (ReadOnlyError, ResponseError):
+        return
 
     # Weekly
-    await redis.hincrby(weekly_key, str(user_id), 1)
-    await redis.expire(weekly_key, WEEKLY_TTL_DAYS * 24 * 3600)
+    try:
+        await redis.hincrby(weekly_key, str(user_id), 1)
+        await redis.expire(weekly_key, WEEKLY_TTL_DAYS * 24 * 3600)
+    except (ReadOnlyError, ResponseError):
+        return
 
 
 async def get_daily(redis: aioredis.Redis) -> Dict[str, int]:

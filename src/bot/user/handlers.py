@@ -10,6 +10,7 @@ import shutil
 import time
 
 import redis.asyncio as aioredis
+from redis.exceptions import ReadOnlyError, ResponseError
 from aiogram import Router
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
@@ -43,9 +44,13 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
         return json.loads(raw) if raw else {}
 
     async def _save_user_data(user_id: int, data: dict) -> None:
-        await redis.set(
-            f"el_estate_bot:user:{user_id}", json.dumps(data), ex=30 * 24 * 3600
-        )
+        try:
+            await redis.set(
+                f"el_estate_bot:user:{user_id}", json.dumps(data), ex=30 * 24 * 3600
+            )
+        except (ReadOnlyError, ResponseError):
+            # Ignore if Redis is read-only; user state is non-critical
+            pass
 
     @router.message(Command("start"))
     async def cmd_start(message: Message, state: FSMContext) -> None:
