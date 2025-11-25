@@ -9,6 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import List, Tuple
+import re
 
 import logging
 import aiohttp
@@ -21,7 +22,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import WebDriverException
 from aiohttp import ClientTimeout
 
-MAX_CONNECTIONS = 100
+MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "12"))
 DEFAULT_CROP_PERCENTAGE = 15
 RATE_LIMIT_RPS = int(os.getenv("RATE_LIMIT_RPS", "5"))
 _limiter = AsyncLimiter(RATE_LIMIT_RPS, time_period=1)
@@ -148,31 +149,53 @@ def _browser_scrape_with_retry(url: str, selenium_url: str) -> List[str]:
     return []
 
 
+def _normalize_image_url(url: str) -> str:
+    """
+    Forces medium-sized images from OLX/Otodom CDN to avoid downloading
+    multi‑megabyte originals that frequently time out.
+    """
+    try:
+        if "apollo.olxcdn.com" in url and "/image" in url:
+            # Ensure there's a size suffix like ;s=1600x1600
+            if ";s=" in url:
+                url = re.sub(r";s=\d+x\d+", ";s=1600x1600", url)
+            elif "/image;" in url:
+                url = url.rstrip("/") + "s=1600x1600"
+            else:
+                # Some links end with /image without semicolon
+                if url.endswith("/image"):
+                    url = url + ";s=1600x1600"
+        return url
+    except Exception:
+        return url
+
+
 async def _fetch_image(session: aiohttp.ClientSession, url: str) -> bytes:
     for attempt in range(1, IMAGE_FETCH_RETRIES + 2):
         async with _limiter:
             try:
-                async with session.get(url) as resp:
+                normalized = _normalize_image_url(url)
+                async with session.get(normalized) as resp:
                     if resp.status == 200:
                         return await resp.read()
                     logger.warning(
                         "image.fetch.non200 status=%d url=%s attempt=%d/%d",
                         resp.status,
-                        url,
+                        normalized,
                         attempt,
                         IMAGE_FETCH_RETRIES + 1,
                     )
             except asyncio.TimeoutError:
                 logger.error(
                     "image.fetch.timeout url=%s attempt=%d/%d",
-                    url,
+                    normalized,
                     attempt,
                     IMAGE_FETCH_RETRIES + 1,
                 )
             except Exception as e:
                 logger.error(
                     "image.fetch.error url=%s err=%s attempt=%d/%d",
-                    url,
+                    normalized,
                     e,
                     attempt,
                     IMAGE_FETCH_RETRIES + 1,
@@ -220,7 +243,7 @@ async def scrape_images(
 
     async with aiohttp.ClientSession(
         connector=aiohttp.TCPConnector(limit=MAX_CONNECTIONS),
-        timeout=ClientTimeout(total=20, connect=5),
+        timeout=ClientTimeout(total=45, connect=8),
     ) as session:
         tasks = [
             asyncio.create_task(

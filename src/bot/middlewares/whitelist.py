@@ -7,7 +7,8 @@ import asyncio
 import logging
 import os
 import time
-from typing import Set
+import json
+from typing import Set, Iterable
 
 import redis.asyncio as aioredis
 from aiogram import BaseMiddleware
@@ -36,6 +37,7 @@ class WhitelistMiddleware(BaseMiddleware):
         super().__init__()
         self.redis = redis
         self.admin_ids: Set[int] = _parse_admin_ids(os.getenv("ADMIN_IDS"))
+        self._backup_path: str = os.getenv("WHITELIST_JSON", "data/whitelist.json")
         # In-memory fallback cache for allowed users
         self._cached_allowed_ids: Set[int] = set()
         self._last_cache_refresh: float = 0.0
@@ -47,9 +49,56 @@ class WhitelistMiddleware(BaseMiddleware):
         except ValueError:
             self._cache_refresh_interval_s = 30
         self._refresher_task: asyncio.Task | None = None
+        self._restore_attempted: bool = False
+
+    def _ensure_backup_dir(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self._backup_path) or ".", exist_ok=True)
+        except Exception:
+            pass
+
+    def _load_backup_ids(self) -> Set[int]:
+        try:
+            if not os.path.exists(self._backup_path):
+                return set()
+            with open(self._backup_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            out: Set[int] = set()
+            for v in raw if isinstance(raw, list) else []:
+                try:
+                    out.add(int(v))
+                except Exception:
+                    continue
+            return out
+        except Exception as exc:
+            logging.getLogger(__name__).warning("whitelist.backup.load_failed err=%r", exc)
+            return set()
+
+    async def _maybe_restore_from_backup(self) -> None:
+        if self._restore_attempted:
+            return
+        self._restore_attempted = True
+        try:
+            ids = await self.redis.smembers(WHITELIST_SET_KEY)
+            if ids:
+                return
+        except Exception:
+            # If Redis errors, skip restore attempt
+            return
+        backup_ids = self._load_backup_ids()
+        if not backup_ids:
+            return
+        try:
+            await self.redis.sadd(WHITELIST_SET_KEY, *[str(i) for i in backup_ids])
+            logging.getLogger(__name__).info(
+                "whitelist.restored count=%d", len(backup_ids)
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).warning("whitelist.restore_failed err=%r", exc)
 
     async def _refresh_cache(self) -> None:
         try:
+            await self._maybe_restore_from_backup()
             ids = await self.redis.smembers(WHITELIST_SET_KEY)
             # smembers returns strings; normalize to ints when possible
             normalized: Set[int] = set()
