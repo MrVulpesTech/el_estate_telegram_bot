@@ -107,6 +107,13 @@ class WhitelistMiddleware(BaseMiddleware):
                     normalized.add(int(uid))
                 except (ValueError, TypeError):
                     continue
+            # Do not replace cache with empty to avoid transient wipes
+            if not normalized:
+                logging.getLogger(__name__).warning(
+                    "whitelist.refresh.empty_skip keeping_cached=%d",
+                    len(self._cached_allowed_ids),
+                )
+                return
             self._cached_allowed_ids = normalized
             self._last_cache_refresh = time.time()
         except Exception as exc:

@@ -158,6 +158,25 @@ async def start() -> None:
     )
     dp = Dispatcher(storage=storage)
 
+    # Send startup notification to tech admins if configured
+    try:
+        tech_admins_env = os.getenv("TECH_ADMIN_IDS", "")
+        tech_admin_ids = []
+        for part in tech_admins_env.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                tech_admin_ids.append(int(part))
+            except ValueError:
+                continue
+        if tech_admin_ids:
+            for uid in tech_admin_ids:
+                with suppress(Exception):
+                    await bot.send_message(uid, "🔔 Bot started and is online.")
+    except Exception:
+        pass
+
     # Middlewares
     dp.message.middleware.register(WhitelistMiddleware(redis))
     dp.callback_query.middleware.register(WhitelistMiddleware(redis))
