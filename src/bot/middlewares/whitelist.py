@@ -37,7 +37,9 @@ class WhitelistMiddleware(BaseMiddleware):
         super().__init__()
         self.redis = redis
         self.admin_ids: Set[int] = _parse_admin_ids(os.getenv("ADMIN_IDS"))
-        self._backup_path: str = os.getenv("WHITELIST_JSON", "data/whitelist.json")
+        # Treat blank env as unset; default to mounted JSON file
+        env_path = os.getenv("WHITELIST_JSON")
+        self._backup_path: str = env_path if env_path else "data/whitelist.json"
         # In-memory fallback cache for allowed users
         self._cached_allowed_ids: Set[int] = set()
         self._last_cache_refresh: float = 0.0
@@ -81,6 +83,19 @@ class WhitelistMiddleware(BaseMiddleware):
         try:
             ids = await self.redis.smembers(WHITELIST_SET_KEY)
             if ids:
+                # Union backup into Redis to avoid shrinking if backup has more
+                backup_ids = self._load_backup_ids()
+                missing = [str(i) for i in backup_ids if str(i) not in ids]
+                if missing:
+                    try:
+                        await self.redis.sadd(WHITELIST_SET_KEY, *missing)
+                        logging.getLogger(__name__).info(
+                            "whitelist.synced added_missing=%d", len(missing)
+                        )
+                    except Exception as exc:
+                        logging.getLogger(__name__).warning(
+                            "whitelist.sync_failed err=%r", exc
+                        )
                 return
         except Exception:
             # If Redis errors, skip restore attempt

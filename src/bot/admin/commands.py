@@ -39,7 +39,8 @@ def _parse_admin_ids() -> set[int]:
 def setup_admin_router(redis: aioredis.Redis) -> Router:
     router = Router()
     admin_ids = _parse_admin_ids()
-    backup_path = os.getenv("WHITELIST_JSON", "data/whitelist.json")
+    env_path = os.getenv("WHITELIST_JSON")
+    backup_path = env_path if env_path else "data/whitelist.json"
     tech_admin_ids_env = os.getenv("TECH_ADMIN_IDS", "")
     tech_admin_ids: list[int] = []
     for part in tech_admin_ids_env.split(","):
