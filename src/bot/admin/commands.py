@@ -5,6 +5,7 @@ Admin commands: /admin, /allow, /allow_username, /allow_from_forward,
 
 import os
 import json
+import logging
 
 import redis.asyncio as aioredis
 from aiogram import Router
@@ -52,11 +53,13 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         except ValueError:
             continue
 
+    log = logging.getLogger(__name__)
+
     def _ensure_backup_dir() -> None:
         try:
             os.makedirs(os.path.dirname(backup_path) or ".", exist_ok=True)
         except Exception:
-            pass
+            log.warning("whitelist.backup.mkdir_failed path=%s", backup_path)
 
     async def _write_backup() -> None:
         try:
@@ -76,9 +79,9 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(sorted(items), f, ensure_ascii=False, indent=0)
             os.replace(tmp, backup_path)
-        except Exception:
-            # Backup failures should not affect bot operation
-            pass
+            log.info("whitelist.backup.written path=%s count=%d", backup_path, len(items))
+        except Exception as exc:
+            log.error("whitelist.backup.write_failed path=%s err=%r", backup_path, exc)
 
     async def _notify(bot, text: str) -> None:
         if not tech_admin_ids:
@@ -176,6 +179,7 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         # Try to resolve labels right away for nicer /allowed output
         await _labels_for_user(message.bot, uid)
         await message.answer(f"Додано {uid} до білого списку")
+        log.info("admin.allow actor_id=%s target_id=%s", message.from_user.id, uid)
         await _write_backup()
         await _notify(message.bot, f"✅ Allow: {uid}")
 
@@ -194,6 +198,7 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
             return
         await redis.srem(WHITELIST_SET_KEY, str(uid))
         await message.answer(f"Видалено {uid} з білого списку")
+        log.info("admin.deny actor_id=%s target_id=%s", message.from_user.id, uid)
         await _write_backup()
         await _notify(message.bot, f"⛔ Deny: {uid}")
 
@@ -213,6 +218,7 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
             await redis.sadd(WHITELIST_SET_KEY, str(uid))
             await redis.set(f"id_to_username:{uid}", uname, ex=30 * 24 * 3600)
             await message.answer(f"Додано {uid} до білого списку")
+            log.info("admin.allow_username actor_id=%s target_id=%s username=%s", message.from_user.id, uid, uname)
             await _write_backup()
             await _notify(message.bot, f"✅ Allow by username {uname} → {uid}")
             return
@@ -277,6 +283,7 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         if "full_name" in locals() and full_name:
             await redis.set(f"id_to_fullname:{uid}", full_name, ex=30 * 24 * 3600)
         await message.answer(f"Додано {uid} до білого списку")
+        log.info("admin.allow_from_forward actor_id=%s target_id=%s", message.from_user.id, uid)
         await _write_backup()
         await _notify(message.bot, f"✅ Allow from forward → {uid}")
 
