@@ -171,6 +171,26 @@ async def start() -> None:
             except ValueError:
                 continue
         if tech_admin_ids:
+            # Install a logging handler that forwards ERROR logs to Telegram
+            class TelegramErrorHandler(logging.Handler):
+                def __init__(self, bot_obj: Bot, recipients: list[int]) -> None:
+                    super().__init__(level=logging.ERROR)
+                    self._bot = bot_obj
+                    self._recipients = recipients
+
+                def emit(self, record: logging.LogRecord) -> None:  # type: ignore[override]
+                    try:
+                        if record.levelno < logging.ERROR:
+                            return
+                        msg = f"ERROR {record.name}: {record.getMessage()}"
+                        # Fire-and-forget to avoid blocking the logger
+                        for uid in self._recipients:
+                            asyncio.create_task(self._bot.send_message(uid, msg[:3500]))
+                    except Exception:
+                        pass
+
+            root.addHandler(TelegramErrorHandler(bot, tech_admin_ids))
+
             for uid in tech_admin_ids:
                 with suppress(Exception):
                     await bot.send_message(uid, "🔔 Bot started and is online.")

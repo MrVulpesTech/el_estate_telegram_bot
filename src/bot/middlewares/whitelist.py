@@ -93,7 +93,7 @@ class WhitelistMiddleware(BaseMiddleware):
                             "whitelist.synced added_missing=%d", len(missing)
                         )
                     except Exception as exc:
-                        logging.getLogger(__name__).warning(
+                        logging.getLogger(__name__).error(
                             "whitelist.sync_failed err=%r", exc
                         )
                 return
@@ -109,7 +109,7 @@ class WhitelistMiddleware(BaseMiddleware):
                 "whitelist.restored count=%d", len(backup_ids)
             )
         except Exception as exc:
-            logging.getLogger(__name__).warning("whitelist.restore_failed err=%r", exc)
+            logging.getLogger(__name__).error("whitelist.restore_failed err=%r", exc)
 
     async def _refresh_cache(self) -> None:
         try:
@@ -132,7 +132,7 @@ class WhitelistMiddleware(BaseMiddleware):
             self._cached_allowed_ids = normalized
             self._last_cache_refresh = time.time()
         except Exception as exc:
-            logging.getLogger(__name__).warning(
+            logging.getLogger(__name__).error(
                 "whitelist.cache.refresh_failed err=%r", exc
             )
 
@@ -160,7 +160,7 @@ class WhitelistMiddleware(BaseMiddleware):
             return bool(await self.redis.sismember(WHITELIST_SET_KEY, str(user_id)))
         except Exception as exc:
             # Fallback to cached whitelist if Redis is unavailable or raises WRONGTYPE
-            logging.getLogger(__name__).warning(
+            logging.getLogger(__name__).error(
                 "whitelist.check_failed user_id=%s err=%r", user_id, exc
             )
             return user_id in self._cached_allowed_ids
