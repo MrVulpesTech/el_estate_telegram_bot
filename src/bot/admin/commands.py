@@ -92,6 +92,30 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
     def _is_admin(uid: int) -> bool:
         return uid in admin_ids
 
+    async def _labels_for_user(bot, uid: int) -> tuple[str | None, str | None]:
+        uname = await redis.get(f"id_to_username:{uid}")
+        full = await redis.get(f"id_to_fullname:{uid}")
+        if uname and full:
+            return uname, full
+        # Fallback: query Telegram for latest username/fullname and cache them
+        try:
+            chat = await bot.get_chat(uid)
+            if not uname and getattr(chat, "username", None):
+                uname = "@" + chat.username.lower()
+                try:
+                    await redis.set(f"id_to_username:{uid}", uname, ex=30 * 24 * 3600)
+                except Exception:
+                    pass
+            if not full and getattr(chat, "full_name", None):
+                full = chat.full_name  # type: ignore[attr-defined]
+                try:
+                    await redis.set(f"id_to_fullname:{uid}", full, ex=30 * 24 * 3600)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return uname, full
+
     @router.message(Command("admin"))
     async def admin_help(message: Message) -> None:
         if not message.from_user or not _is_admin(message.from_user.id):
@@ -149,6 +173,8 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
                 return
 
         await redis.sadd(WHITELIST_SET_KEY, str(uid))
+        # Try to resolve labels right away for nicer /allowed output
+        await _labels_for_user(message.bot, uid)
         await message.answer(f"Додано {uid} до білого списку")
         await _write_backup()
         await _notify(message.bot, f"✅ Allow: {uid}")
@@ -261,8 +287,15 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         ids = await redis.smembers(WHITELIST_SET_KEY)
         rows: list[tuple[str, str | None, str | None]] = []
         for uid in sorted(ids):
-            uname = await redis.get(f"id_to_username:{uid}")
-            full = await redis.get(f"id_to_fullname:{uid}")
+            try:
+                uid_int = int(uid)
+            except Exception:
+                uid_int = None  # type: ignore[assignment]
+            if uid_int is not None:
+                uname, full = await _labels_for_user(message.bot, uid_int)
+            else:
+                uname = await redis.get(f"id_to_username:{uid}")
+                full = await redis.get(f"id_to_fullname:{uid}")
             rows.append((uid, uname, full))
         await message.answer(render_allowed_users(rows))
 
@@ -289,8 +322,15 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         ids = await redis.smembers(WHITELIST_SET_KEY)
         rows: list[tuple[str, str | None, str | None]] = []
         for uid in sorted(ids):
-            uname = await redis.get(f"id_to_username:{uid}")
-            full = await redis.get(f"id_to_fullname:{uid}")
+            try:
+                uid_int = int(uid)
+            except Exception:
+                uid_int = None  # type: ignore[assignment]
+            if uid_int is not None:
+                uname, full = await _labels_for_user(callback.bot, uid_int)
+            else:
+                uname = await redis.get(f"id_to_username:{uid}")
+                full = await redis.get(f"id_to_fullname:{uid}")
             rows.append((uid, uname, full))
         await callback.message.edit_text(render_allowed_users(rows))
         await callback.answer()
