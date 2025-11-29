@@ -73,6 +73,33 @@ async def _redis_is_writable(redis: aioredis.Redis) -> bool:
         return False
 
 
+async def _monitor_redis_and_fallback(
+    redis: aioredis.Redis,
+    dp: Dispatcher,
+    bot: Bot,
+    tech_admin_ids: list[int],
+    interval_s: int = 20,
+) -> None:
+    """Periodically verify Redis writability; if it turns read-only at runtime,
+    switch FSM storage to in-memory to keep bot responsive.
+    """
+    logger = logging.getLogger(__name__)
+    while True:
+        try:
+            await asyncio.sleep(max(5, interval_s))
+            writable = await _redis_is_writable(redis)
+            if not writable and isinstance(dp.storage, RedisStorage):
+                dp.storage = MemoryStorage()
+                msg = "redis.readonly detected at runtime; switched FSM to MemoryStorage"
+                logger.error(msg)
+                for uid in tech_admin_ids:
+                    with suppress(Exception):
+                        await bot.send_message(uid, f"❗ {msg}")
+        except Exception as exc:
+            logger.error("redis.monitor.failed err=%r", exc)
+            await asyncio.sleep(max(5, interval_s))
+
+
 async def create_health_app(
     redis: aioredis.Redis, selenium_url: Optional[str]
 ) -> web.Application:
@@ -173,23 +200,40 @@ async def start() -> None:
         if tech_admin_ids:
             # Install a logging handler that forwards ERROR logs to Telegram
             class TelegramErrorHandler(logging.Handler):
-                def __init__(self, bot_obj: Bot, recipients: list[int]) -> None:
+                def __init__(
+                    self, bot_obj: Bot, recipients: list[int], loop: asyncio.AbstractEventLoop
+                ) -> None:
                     super().__init__(level=logging.ERROR)
                     self._bot = bot_obj
                     self._recipients = recipients
+                    self._loop = loop
 
                 def emit(self, record: logging.LogRecord) -> None:  # type: ignore[override]
                     try:
                         if record.levelno < logging.ERROR:
                             return
                         msg = f"ERROR {record.name}: {record.getMessage()}"
-                        # Fire-and-forget to avoid blocking the logger
-                        for uid in self._recipients:
-                            asyncio.create_task(self._bot.send_message(uid, msg[:3500]))
+                        # Schedule safely from any thread
+                        async def _send_all() -> None:
+                            for uid in self._recipients:
+                                try:
+                                    await self._bot.send_message(uid, msg[:3500])
+                                except Exception:
+                                    continue
+
+                        try:
+                            # If we are in the running loop
+                            asyncio.get_running_loop()
+                            self._loop.create_task(_send_all())
+                        except RuntimeError:
+                            # From non-async context/thread
+                            asyncio.run_coroutine_threadsafe(_send_all(), self._loop)
                     except Exception:
                         pass
 
-            root.addHandler(TelegramErrorHandler(bot, tech_admin_ids))
+            # Use the app loop for thread-safe scheduling
+            app_loop = asyncio.get_running_loop()
+            root.addHandler(TelegramErrorHandler(bot, tech_admin_ids, app_loop))
 
             for uid in tech_admin_ids:
                 with suppress(Exception):
@@ -232,6 +276,24 @@ async def start() -> None:
         loop.add_signal_handler(signal.SIGTERM, _handle_signal, "SIGTERM")
     with suppress(NotImplementedError):
         loop.add_signal_handler(signal.SIGINT, _handle_signal, "SIGINT")
+
+    # Start Redis monitor in background (alerts + runtime fallback)
+    try:
+        tech_admins_env = os.getenv("TECH_ADMIN_IDS", "")
+        tech_admin_ids_for_monitor: list[int] = []
+        for part in tech_admins_env.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                tech_admin_ids_for_monitor.append(int(part))
+            except ValueError:
+                continue
+        asyncio.create_task(
+            _monitor_redis_and_fallback(redis, dp, bot, tech_admin_ids_for_monitor)
+        )
+    except Exception:
+        pass
 
     # Run polling until shutdown_event is set
     polling_task = asyncio.create_task(dp.start_polling(bot))
