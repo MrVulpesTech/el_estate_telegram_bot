@@ -77,9 +77,6 @@ class WhitelistMiddleware(BaseMiddleware):
             return set()
 
     async def _maybe_restore_from_backup(self) -> None:
-        if self._restore_attempted:
-            return
-        self._restore_attempted = True
         try:
             ids = await self.redis.smembers(WHITELIST_SET_KEY)
             if ids:
@@ -97,6 +94,7 @@ class WhitelistMiddleware(BaseMiddleware):
                             "whitelist.sync_failed err=%r", exc
                         )
                 return
+            # ids is empty -> attempt full restore from backup (can happen after Redis flush/restart)
         except Exception:
             # If Redis errors, skip restore attempt
             return

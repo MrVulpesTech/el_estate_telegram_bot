@@ -61,6 +61,23 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         except Exception:
             log.warning("whitelist.backup.mkdir_failed path=%s", backup_path)
 
+    def _load_backup_ids() -> list[str]:
+        try:
+            if not os.path.exists(backup_path):
+                return []
+            with open(backup_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            out: list[str] = []
+            for v in raw if isinstance(raw, list) else []:
+                try:
+                    out.append(str(int(v)))
+                except Exception:
+                    continue
+            return out
+        except Exception as exc:
+            log.error("whitelist.backup.read_failed path=%s err=%r", backup_path, exc)
+            return []
+
     async def _write_backup(bot=None) -> None:
         try:
             ids = await redis.smembers(WHITELIST_SET_KEY)
@@ -231,15 +248,15 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         # Try to resolve via Bot API if the user has interacted before
         try:
             chat = await message.bot.get_chat(uname)
-            if chat and getattr(chat, \"id\", None):
+            if chat and getattr(chat, "id", None):
                 uid = int(chat.id)
                 await redis.sadd(WHITELIST_SET_KEY, str(uid))
-                await redis.set(f\"username_to_id:{uname}\", str(uid), ex=30 * 24 * 3600)
-                await redis.set(f\"id_to_username:{uid}\", uname, ex=30 * 24 * 3600)
-                await message.answer(f\"Додано {uid} до білого списку (через Bot API)\")
-                log.info(\"admin.allow_username_api actor_id=%s target_id=%s username=%s\", message.from_user.id, uid, uname)
+                await redis.set(f"username_to_id:{uname}", str(uid), ex=30 * 24 * 3600)
+                await redis.set(f"id_to_username:{uid}", uname, ex=30 * 24 * 3600)
+                await message.answer(f"Додано {uid} до білого списку (через Bot API)")
+                log.info("admin.allow_username_api actor_id=%s target_id=%s username=%s", message.from_user.id, uid, uname)
                 await _write_backup(message.bot)
-                await _notify(message.bot, f\"✅ Allow by username {uname} → {uid} (API)\")
+                await _notify(message.bot, f"✅ Allow by username {uname} → {uid} (API)")
                 return
         except Exception:
             pass
@@ -313,6 +330,9 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         if not message.from_user or not _is_admin(message.from_user.id):
             return
         ids = await redis.smembers(WHITELIST_SET_KEY)
+        if not ids:
+            # Fallback to JSON backup to display something useful
+            ids = set(_load_backup_ids())
         rows: list[tuple[str, str | None, str | None]] = []
         for uid in sorted(ids):
             try:
@@ -348,6 +368,8 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         if not callback.from_user or not _is_admin(callback.from_user.id):
             return
         ids = await redis.smembers(WHITELIST_SET_KEY)
+        if not ids:
+            ids = set(_load_backup_ids())
         rows: list[tuple[str, str | None, str | None]] = []
         for uid in sorted(ids):
             try:
@@ -397,23 +419,23 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         await redis.set(f"id_to_fullname:{uid}", full_name, ex=30 * 24 * 3600)
         await message.answer("Імʼя оновлено")
 
-    @router.message(Command(\"setusername\"))
+    @router.message(Command("setusername"))
     async def setusername(message: Message) -> None:
         if not message.from_user or not _is_admin(message.from_user.id):
             return
         # /setusername <id> @username
-        parts = (message.text or \"\").split(maxsplit=2)
-        if len(parts) < 3 or not parts[2].startswith(\"@\"):
-            await message.answer(\"Формат: /setusername id @нік\")
+        parts = (message.text or "").split(maxsplit=2)
+        if len(parts) < 3 or not parts[2].startswith("@"):
+            await message.answer("Формат: /setusername id @нік")
             return
         try:
             uid = int(parts[1])
         except ValueError:
-            await message.answer(\"Невірний id\")
+            await message.answer("Невірний id")
             return
         uname = parts[2].lower()
-        await redis.set(f\"id_to_username:{uid}\", uname, ex=30 * 24 * 3600)
-        await redis.set(f\"username_to_id:{uname}\", str(uid), ex=30 * 24 * 3600)
-        await message.answer(\"Нік оновлено\")
+        await redis.set(f"id_to_username:{uid}", uname, ex=30 * 24 * 3600)
+        await redis.set(f"username_to_id:{uname}", str(uid), ex=30 * 24 * 3600)
+        await message.answer("Нік оновлено")
 
     return router
