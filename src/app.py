@@ -210,6 +210,9 @@ async def start() -> None:
 
                 def emit(self, record: logging.LogRecord) -> None:  # type: ignore[override]
                     try:
+                        # Ignore noisy network scanner errors from aiohttp server
+                        if record.name == "aiohttp.server":
+                            return
                         if record.levelno < logging.ERROR:
                             return
                         msg = f"ERROR {record.name}: {record.getMessage()}"
