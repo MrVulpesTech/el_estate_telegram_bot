@@ -93,8 +93,15 @@ class WhitelistMiddleware(BaseMiddleware):
                         logging.getLogger(__name__).error(
                             "whitelist.sync_failed err=%r", exc
                         )
+                # Also refresh cache from Redis
+                try:
+                    self._cached_allowed_ids = {int(x) for x in ids if str(x).isdigit()}
+                    self._last_cache_refresh = time.time()
+                except Exception:
+                    pass
                 return
-            # ids is empty -> attempt full restore from backup (can happen after Redis flush/restart)
+            # ids is empty -> attempt full restore from backup (can happen after Redis flush/restart).
+            # If Redis is read-only, fall back to in-memory cache only.
         except Exception:
             # If Redis errors, skip restore attempt
             return
@@ -108,20 +115,36 @@ class WhitelistMiddleware(BaseMiddleware):
             )
         except Exception as exc:
             logging.getLogger(__name__).error("whitelist.restore_failed err=%r", exc)
+            # Populate cache from backup as a fallback when we cannot write to Redis
+            try:
+                self._cached_allowed_ids = {int(x) for x in backup_ids}
+                self._last_cache_refresh = time.time()
+                logging.getLogger(__name__).warning(
+                    "whitelist.cache.loaded_from_backup count=%d", len(self._cached_allowed_ids)
+                )
+            except Exception:
+                pass
 
     async def _refresh_cache(self) -> None:
         try:
             await self._maybe_restore_from_backup()
             ids = await self.redis.smembers(WHITELIST_SET_KEY)
             # smembers returns strings; normalize to ints when possible
-            normalized: Set[int] = set()
-            for uid in ids:
-                try:
-                    normalized.add(int(uid))
-                except (ValueError, TypeError):
-                    continue
-            # Do not replace cache with empty to avoid transient wipes
+            normalized: Set[int] = {
+                int(uid) for uid in ids if isinstance(uid, str) and uid.isdigit()
+            }
+            # If Redis returned empty, try to load from backup into cache
             if not normalized:
+                backup = self._load_backup_ids()
+                if backup:
+                    self._cached_allowed_ids = {int(x) for x in backup}
+                    self._last_cache_refresh = time.time()
+                    logging.getLogger(__name__).warning(
+                        "whitelist.refresh.loaded_from_backup count=%d",
+                        len(self._cached_allowed_ids),
+                    )
+                    return
+                # Otherwise keep existing cache
                 logging.getLogger(__name__).warning(
                     "whitelist.refresh.empty_skip keeping_cached=%d",
                     len(self._cached_allowed_ids),
@@ -155,7 +178,11 @@ class WhitelistMiddleware(BaseMiddleware):
         if user_id in self.admin_ids:
             return True
         try:
-            return bool(await self.redis.sismember(WHITELIST_SET_KEY, str(user_id)))
+            allowed = await self.redis.sismember(WHITELIST_SET_KEY, str(user_id))
+            if allowed:
+                return True
+            # If Redis says false, still allow if cached says true
+            return user_id in self._cached_allowed_ids
         except Exception as exc:
             # Fallback to cached whitelist if Redis is unavailable or raises WRONGTYPE
             logging.getLogger(__name__).error(

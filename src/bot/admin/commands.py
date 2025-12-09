@@ -78,25 +78,48 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
             log.error("whitelist.backup.read_failed path=%s err=%r", backup_path, exc)
             return []
 
-    async def _write_backup(bot=None) -> None:
+    async def _write_backup(bot=None, add_id: int | None = None, remove_id: int | None = None) -> None:
         try:
-            ids = await redis.smembers(WHITELIST_SET_KEY)
-            # Normalize as list of ints/strings
-            items = []
-            for v in ids:
+            # Source 1: current Redis state (may be empty during outages)
+            ids_redis_raw = await redis.smembers(WHITELIST_SET_KEY)
+            ids_redis: set[int] = set()
+            for v in ids_redis_raw:
                 try:
-                    items.append(int(v))
+                    ids_redis.add(int(v))
                 except Exception:
                     try:
-                        items.append(int(str(v)))
+                        ids_redis.add(int(str(v)))
                     except Exception:
                         continue
+
+            # Source 2: existing JSON file (guards against accidental shrink)
+            ids_file: set[int] = set()
+            try:
+                if os.path.exists(backup_path):
+                    with open(backup_path, "r", encoding="utf-8") as f:
+                        raw = json.load(f)
+                    for v in raw if isinstance(raw, list) else []:
+                        try:
+                            ids_file.add(int(v))
+                        except Exception:
+                            continue
+            except Exception as exc:
+                log.error("whitelist.backup.read_failed path=%s err=%r", backup_path, exc)
+
+            # Start from union to avoid accidental data loss when Redis is empty or partial
+            items_set: set[int] = set(ids_file) | set(ids_redis)
+            # Apply operation hints to ensure correctness on targeted changes
+            if add_id is not None:
+                items_set.add(int(add_id))
+            if remove_id is not None:
+                items_set.discard(int(remove_id))
+
             _ensure_backup_dir()
             tmp = backup_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(sorted(items), f, ensure_ascii=False, indent=0)
+                json.dump(sorted(items_set), f, ensure_ascii=False, indent=0)
             os.replace(tmp, backup_path)
-            log.info("whitelist.backup.written path=%s count=%d", backup_path, len(items))
+            log.info("whitelist.backup.written path=%s count=%d", backup_path, len(items_set))
         except Exception as exc:
             log.error("whitelist.backup.write_failed path=%s err=%r", backup_path, exc)
             if bot is not None:
@@ -203,7 +226,7 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         await _labels_for_user(message.bot, uid)
         await message.answer(f"Додано {uid} до білого списку")
         log.info("admin.allow actor_id=%s target_id=%s", message.from_user.id, uid)
-        await _write_backup(message.bot)
+        await _write_backup(message.bot, add_id=uid)
         await _notify(message.bot, f"✅ Allow: {uid}")
 
     @router.message(Command("deny"))
@@ -222,7 +245,7 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         await redis.srem(WHITELIST_SET_KEY, str(uid))
         await message.answer(f"Видалено {uid} з білого списку")
         log.info("admin.deny actor_id=%s target_id=%s", message.from_user.id, uid)
-        await _write_backup(message.bot)
+        await _write_backup(message.bot, remove_id=uid)
         await _notify(message.bot, f"⛔ Deny: {uid}")
 
     @router.message(Command("allow_username"))
@@ -242,7 +265,7 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
             await redis.set(f"id_to_username:{uid}", uname, ex=30 * 24 * 3600)
             await message.answer(f"Додано {uid} до білого списку")
             log.info("admin.allow_username actor_id=%s target_id=%s username=%s", message.from_user.id, uid, uname)
-            await _write_backup(message.bot)
+            await _write_backup(message.bot, add_id=uid)
             await _notify(message.bot, f"✅ Allow by username {uname} → {uid}")
             return
         # Try to resolve via Bot API if the user has interacted before
@@ -255,7 +278,7 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
                 await redis.set(f"id_to_username:{uid}", uname, ex=30 * 24 * 3600)
                 await message.answer(f"Додано {uid} до білого списку (через Bot API)")
                 log.info("admin.allow_username_api actor_id=%s target_id=%s username=%s", message.from_user.id, uid, uname)
-                await _write_backup(message.bot)
+                await _write_backup(message.bot, add_id=uid)
                 await _notify(message.bot, f"✅ Allow by username {uname} → {uid} (API)")
                 return
         except Exception:
@@ -322,7 +345,7 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
             await redis.set(f"id_to_fullname:{uid}", full_name, ex=30 * 24 * 3600)
         await message.answer(f"Додано {uid} до білого списку")
         log.info("admin.allow_from_forward actor_id=%s target_id=%s", message.from_user.id, uid)
-        await _write_backup(message.bot)
+        await _write_backup(message.bot, add_id=uid)
         await _notify(message.bot, f"✅ Allow from forward → {uid}")
 
     @router.message(Command("allowed"))
@@ -439,3 +462,4 @@ def setup_admin_router(redis: aioredis.Redis) -> Router:
         await message.answer("Нік оновлено")
 
     return router
+
