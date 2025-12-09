@@ -186,14 +186,18 @@ async def _fetch_image(session: aiohttp.ClientSession, url: str) -> bytes:
                         IMAGE_FETCH_RETRIES + 1,
                     )
             except asyncio.TimeoutError:
-                logger.error(
+                level = logging.WARNING if attempt <= IMAGE_FETCH_RETRIES else logging.ERROR
+                logger.log(
+                    level,
                     "image.fetch.timeout url=%s attempt=%d/%d",
                     normalized,
                     attempt,
                     IMAGE_FETCH_RETRIES + 1,
                 )
             except Exception as e:
-                logger.error(
+                level = logging.WARNING if attempt <= IMAGE_FETCH_RETRIES else logging.ERROR
+                logger.log(
+                    level,
                     "image.fetch.error url=%s err=%s attempt=%d/%d",
                     normalized,
                     e,
