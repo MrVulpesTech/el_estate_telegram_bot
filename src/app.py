@@ -78,10 +78,11 @@ async def _monitor_redis_and_fallback(
     dp: Dispatcher,
     bot: Bot,
     tech_admin_ids: list[int],
+    shutdown_event: asyncio.Event,
     interval_s: int = 20,
 ) -> None:
     """Periodically verify Redis writability; if it turns read-only at runtime,
-    switch FSM storage to in-memory to keep bot responsive.
+    alert admins and request graceful restart.
     """
     logger = logging.getLogger(__name__)
     while True:
@@ -89,12 +90,16 @@ async def _monitor_redis_and_fallback(
             await asyncio.sleep(max(5, interval_s))
             writable = await _redis_is_writable(redis)
             if not writable and isinstance(dp.storage, RedisStorage):
-                dp.storage = MemoryStorage()
-                msg = "redis.readonly detected at runtime; switched FSM to MemoryStorage"
+                msg = "redis.readonly detected at runtime; requesting graceful restart"
                 logger.error(msg)
                 for uid in tech_admin_ids:
                     with suppress(Exception):
                         await bot.send_message(uid, f"❗ {msg}")
+                try:
+                    shutdown_event.set()
+                except Exception:
+                    pass
+                break
         except Exception as exc:
             logger.error("redis.monitor.failed err=%r", exc)
             await asyncio.sleep(max(5, interval_s))
@@ -165,7 +170,7 @@ async def start() -> None:
     if not bot_token:
         raise RuntimeError(f"Missing {BOT_TOKEN_ENV} environment variable")
 
-    redis_url = os.getenv(REDIS_URL_ENV, "redis://localhost:6379/0")
+    redis_url = os.getenv(REDIS_URL_ENV, "redis://redis:6379/0")
     selenium_url = os.getenv(SELENIUM_URL_ENV)
     health_port = int(os.getenv(HEALTH_PORT_ENV, "8080"))
 
@@ -293,7 +298,9 @@ async def start() -> None:
             except ValueError:
                 continue
         asyncio.create_task(
-            _monitor_redis_and_fallback(redis, dp, bot, tech_admin_ids_for_monitor)
+            _monitor_redis_and_fallback(
+                redis, dp, bot, tech_admin_ids_for_monitor, shutdown_event
+            )
         )
     except Exception:
         pass

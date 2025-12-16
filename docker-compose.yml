@@ -18,8 +18,8 @@ services:
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
       - ADMIN_IDS=${ADMIN_IDS}
-      - REDIS_URL=${REDIS_URL}
-      - SELENIUM_URL=${SELENIUM_URL}
+      - REDIS_URL=redis://redis:6379/0
+      - SELENIUM_URL=http://selenium:4444/wd/hub
       - RATE_LIMIT_RPS=${RATE_LIMIT_RPS}
       - HEALTH_PORT=8080
       - TECH_ADMIN_IDS=${TECH_ADMIN_IDS}
