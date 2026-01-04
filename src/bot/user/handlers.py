@@ -1,9 +1,13 @@
 """
 User commands and URL processing handlers.
 Includes /start, /crop, /retry, URL handler; uses scraping service and stats.
+Changes: make URL processing non-blocking by offloading scraping and sending to a background task;
+add per-user task deduplication; improve send retry logging (WARN on retries, ERROR on final failure).
 """
 
 import asyncio
+import contextlib
+import logging
 import json
 import os
 import shutil
@@ -38,6 +42,10 @@ class UserState(StatesGroup):
 
 def setup_user_router(redis: aioredis.Redis) -> Router:
     router = Router()
+    logger = logging.getLogger(__name__)
+
+    # Track per-user running tasks to avoid overlapping long jobs for the same chat
+    _user_tasks: dict[int, asyncio.Task] = {}
 
     async def _get_user_data(user_id: int) -> dict:
         raw = await redis.get(f"el_estate_bot:user:{user_id}")
@@ -133,6 +141,13 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
 
     async def _process_url(message: Message, state: FSMContext, url: str) -> None:
         user_id = message.from_user.id
+
+        # If there's already a running task for this user, do not start another one
+        existing = _user_tasks.get(user_id)
+        if existing and not existing.done():
+            await message.answer("⏳ Ще обробляю попереднє посилання. Зачекайте, будь ласка…")
+            return
+
         # Refresh mapping on any interaction
         try:
             user = message.from_user
@@ -161,53 +176,93 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
         selenium_url = os.getenv("SELENIUM_URL", "http://localhost:4444/wd/hub")
 
         status = await message.answer("Збираю зображення, зачекайте…")
-        images, user_dir = await scrape_images(
-            url, user_id, selenium_url, crop_percent=crop
-        )
 
-        if images:
-            # Increment stats on success
-            await stats_service.increment(redis, user_id)
-            # Send images in groups of 10
-            for i in range(0, len(images), 10):
-                group = images[i : i + 10]
-                media = [InputMediaPhoto(media=FSInputFile(p)) for p in group]
-                retries = 5
-                attempt = 0
-                while attempt < retries:
-                    try:
-                        await message.bot.send_media_group(
-                            chat_id=message.chat.id, media=media
-                        )
-                        break
-                    except TelegramRetryAfter as e:
-                        attempt += 1
-                        await asyncio.sleep(e.retry_after + 1)
-                    except Exception:
-                        attempt += 1
-                        await asyncio.sleep(3)
-            await status.edit_text(f"✅ Готово. Надіслано {len(images)} зображень.")
-            data.update(
-                {
-                    "last_url": url,
-                    "last_images_count": len(images),
-                    "last_processed_time": int(time.time()),
-                    "crop_percentage": crop,
-                }
-            )
-            await _save_user_data(user_id, data)
-        else:
-            await status.edit_text(
-                "❌ Не вдалося знайти зображення для цього посилання."
-            )
-            await state.set_state(UserState.waiting_for_url)
+        async def _do_scrape_and_send() -> None:
+            user_dir = ""
+            try:
+                images, user_dir = await scrape_images(
+                    url, user_id, selenium_url, crop_percent=crop
+                )
 
-        # Cleanup user directory to free disk space
-        try:
-            if user_dir and os.path.isdir(user_dir):
-                shutil.rmtree(user_dir)
-        except Exception:
-            pass
+                if images:
+                    # Increment stats on success
+                    await stats_service.increment(redis, user_id)
+                    # Send images in groups of 10
+                    for i in range(0, len(images), 10):
+                        group = images[i : i + 10]
+                        media = [InputMediaPhoto(media=FSInputFile(p)) for p in group]
+                        retries = 5
+                        attempt = 0
+                        last_exc: Exception | None = None
+                        while attempt < retries:
+                            try:
+                                await message.bot.send_media_group(
+                                    chat_id=message.chat.id, media=media
+                                )
+                                last_exc = None
+                                break
+                            except TelegramRetryAfter as e:
+                                attempt += 1
+                                logger.warning(
+                                    "send.media.retry_after user_id=%s delay=%s attempt=%d/%d",
+                                    user_id,
+                                    getattr(e, "retry_after", None),
+                                    attempt,
+                                    retries,
+                                )
+                                await asyncio.sleep(e.retry_after + 1)
+                            except Exception as exc:
+                                attempt += 1
+                                last_exc = exc
+                                logger.warning(
+                                    "send.media.retry user_id=%s err=%r attempt=%d/%d",
+                                    user_id,
+                                    exc,
+                                    attempt,
+                                    retries,
+                                )
+                                await asyncio.sleep(3)
+                        if last_exc is not None:
+                            logger.error(
+                                "send.media.failed user_id=%s err=%r group_size=%d",
+                                user_id,
+                                last_exc,
+                                len(group),
+                            )
+
+                    await status.edit_text(f"✅ Готово. Надіслано {len(images)} зображень.")
+                    data.update(
+                        {
+                            "last_url": url,
+                            "last_images_count": len(images),
+                            "last_processed_time": int(time.time()),
+                            "crop_percentage": crop,
+                        }
+                    )
+                    await _save_user_data(user_id, data)
+                else:
+                    await status.edit_text(
+                        "❌ Не вдалося знайти зображення для цього посилання."
+                    )
+                    await state.set_state(UserState.waiting_for_url)
+            except Exception as exc:
+                logger.error(
+                    "user.scrape.failed user_id=%s url=%s err=%r", user_id, url, exc
+                )
+                with contextlib.suppress(Exception):
+                    await status.edit_text("❌ Сталася помилка під час обробки.")
+                await state.set_state(UserState.waiting_for_url)
+            finally:
+                # Cleanup user directory to free disk space
+                try:
+                    if user_dir and os.path.isdir(user_dir):
+                        shutil.rmtree(user_dir)
+                except Exception:
+                    pass
+                _user_tasks.pop(user_id, None)
+
+        # Run scraping and sending in background to avoid blocking the update handler
+        _user_tasks[user_id] = asyncio.create_task(_do_scrape_and_send())
 
     @router.callback_query(lambda c: c.data and c.data.startswith("set_crop:"))
     async def set_crop_cb(callback: CallbackQuery) -> None:
