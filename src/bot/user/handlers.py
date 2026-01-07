@@ -1,8 +1,9 @@
 """
 User commands and URL processing handlers.
 Includes /start, /crop, /retry, URL handler; uses scraping service and stats.
-Changes: make URL processing non-blocking by offloading scraping and sending to a background task;
-add per-user task deduplication; improve send retry logging (WARN on retries, ERROR on final failure).
+Changes: non-blocking URL processing via background task; per-user task deduplication;
+dynamic Telegram send timeout backoff; global send limiter (SEND_CONCURRENCY);
+optional inter-group delay (SEND_GROUP_DELAY_MS); WARN on retries, ERROR on final failure.
 """
 
 import asyncio
@@ -40,6 +41,11 @@ TG_TIMEOUT_BASE_S = int(os.getenv("TG_TIMEOUT_BASE_S", "60"))
 TG_TIMEOUT_STEP_S = int(os.getenv("TG_TIMEOUT_STEP_S", "30"))
 TG_TIMEOUT_MAX_S = int(os.getenv("TG_TIMEOUT_MAX_S", "240"))
 TG_CONNECT_TIMEOUT_S = int(os.getenv("TG_CONNECT_TIMEOUT_S", "10"))
+
+# Global limiter for concurrent Telegram upload operations
+SEND_CONCURRENCY = max(1, int(os.getenv("SEND_CONCURRENCY", "1")))
+SEND_GROUP_DELAY_MS = max(0, int(os.getenv("SEND_GROUP_DELAY_MS", "500")))
+_send_semaphore = asyncio.Semaphore(SEND_CONCURRENCY)
 
 
 class UserState(StatesGroup):
@@ -213,102 +219,106 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
                     # Increment stats on success
                     await stats_service.increment(redis, user_id)
                     # Send images in groups
-                    for i in range(0, len(images), MEDIA_GROUP_SIZE):
-                        group = images[i : i + MEDIA_GROUP_SIZE]
-                        media = [InputMediaPhoto(media=FSInputFile(p)) for p in group]
-                        retries = 5
-                        attempt = 0
-                        last_exc: Exception | None = None
-                        while attempt < retries:
-                            try:
-                                # Dynamically increase Telegram client timeout per attempt
-                                desired_total = min(
-                                    TG_TIMEOUT_BASE_S + attempt * TG_TIMEOUT_STEP_S, TG_TIMEOUT_MAX_S
-                                )
-                                await _bump_bot_timeout(desired_total)
-                                await message.bot.send_media_group(
-                                    chat_id=message.chat.id, media=media
-                                )
-                                last_exc = None
-                                break
-                            except TelegramRetryAfter as e:
-                                attempt += 1
-                                logger.warning(
-                                    "send.media.retry_after user_id=%s delay=%s attempt=%d/%d",
-                                    user_id,
-                                    getattr(e, "retry_after", None),
-                                    attempt,
-                                    retries,
-                                )
-                                await asyncio.sleep(e.retry_after + 1)
-                            except Exception as exc:
-                                attempt += 1
-                                last_exc = exc
-                                logger.warning(
-                                    "send.media.retry user_id=%s err=%r attempt=%d/%d",
-                                    user_id,
-                                    exc,
-                                    attempt,
-                                    retries,
-                                )
-                                await asyncio.sleep(3)
-                        if last_exc is not None:
-                            # Fallback: send images one-by-one with retries
-                            logger.warning(
-                                "send.media.group_fallback user_id=%s group_size=%d",
-                                user_id,
-                                len(group),
-                            )
-                            for p in group:
-                                retries_single = 5
-                                attempt_single = 0
-                                last_exc_single: Exception | None = None
-                                while attempt_single < retries_single:
-                                    try:
-                                        desired_total_single = min(
-                                            TG_TIMEOUT_BASE_S + attempt_single * TG_TIMEOUT_STEP_S,
-                                            TG_TIMEOUT_MAX_S,
-                                        )
-                                        await _bump_bot_timeout(desired_total_single)
-                                        await message.bot.send_photo(
-                                            chat_id=message.chat.id,
-                                            photo=FSInputFile(p),
-                                        )
-                                        last_exc_single = None
-                                        break
-                                    except TelegramRetryAfter as e:
-                                        attempt_single += 1
-                                        logger.warning(
-                                            "send.photo.retry_after user_id=%s delay=%s attempt=%d/%d",
-                                            user_id,
-                                            getattr(e, "retry_after", None),
-                                            attempt_single,
-                                            retries_single,
-                                        )
-                                        await asyncio.sleep(e.retry_after + 1)
-                                    except Exception as exc2:
-                                        attempt_single += 1
-                                        last_exc_single = exc2
-                                        logger.warning(
-                                            "send.photo.retry user_id=%s err=%r attempt=%d/%d",
-                                            user_id,
-                                            exc2,
-                                            attempt_single,
-                                            retries_single,
-                                        )
-                                        await asyncio.sleep(2)
-                                if last_exc_single is not None:
-                                    logger.error(
-                                        "send.photo.failed user_id=%s err=%r",
-                                        user_id,
-                                        last_exc_single,
+                    async with _send_semaphore:
+                        for i in range(0, len(images), MEDIA_GROUP_SIZE):
+                            group = images[i : i + MEDIA_GROUP_SIZE]
+                            media = [InputMediaPhoto(media=FSInputFile(p)) for p in group]
+                            retries = 5
+                            attempt = 0
+                            last_exc: Exception | None = None
+                            while attempt < retries:
+                                try:
+                                    # Dynamically increase Telegram client timeout per attempt
+                                    desired_total = min(
+                                        TG_TIMEOUT_BASE_S + attempt * TG_TIMEOUT_STEP_S, TG_TIMEOUT_MAX_S
                                     )
-                            logger.error(
-                                "send.media.failed user_id=%s err=%r group_size=%d",
-                                user_id,
-                                last_exc,
-                                len(group),
-                            )
+                                    await _bump_bot_timeout(desired_total)
+                                    await message.bot.send_media_group(
+                                        chat_id=message.chat.id, media=media
+                                    )
+                                    last_exc = None
+                                    break
+                                except TelegramRetryAfter as e:
+                                    attempt += 1
+                                    logger.warning(
+                                        "send.media.retry_after user_id=%s delay=%s attempt=%d/%d",
+                                        user_id,
+                                        getattr(e, "retry_after", None),
+                                        attempt,
+                                        retries,
+                                    )
+                                    await asyncio.sleep(e.retry_after + 1)
+                                except Exception as exc:
+                                    attempt += 1
+                                    last_exc = exc
+                                    logger.warning(
+                                        "send.media.retry user_id=%s err=%r attempt=%d/%d",
+                                        user_id,
+                                        exc,
+                                        attempt,
+                                        retries,
+                                    )
+                                    await asyncio.sleep(3)
+                            if last_exc is not None:
+                                # Fallback: send images one-by-one with retries
+                                logger.warning(
+                                    "send.media.group_fallback user_id=%s group_size=%d",
+                                    user_id,
+                                    len(group),
+                                )
+                                for p in group:
+                                    retries_single = 5
+                                    attempt_single = 0
+                                    last_exc_single: Exception | None = None
+                                    while attempt_single < retries_single:
+                                        try:
+                                            desired_total_single = min(
+                                                TG_TIMEOUT_BASE_S + attempt_single * TG_TIMEOUT_STEP_S,
+                                                TG_TIMEOUT_MAX_S,
+                                            )
+                                            await _bump_bot_timeout(desired_total_single)
+                                            await message.bot.send_photo(
+                                                chat_id=message.chat.id,
+                                                photo=FSInputFile(p),
+                                            )
+                                            last_exc_single = None
+                                            break
+                                        except TelegramRetryAfter as e:
+                                            attempt_single += 1
+                                            logger.warning(
+                                                "send.photo.retry_after user_id=%s delay=%s attempt=%d/%d",
+                                                user_id,
+                                                getattr(e, "retry_after", None),
+                                                attempt_single,
+                                                retries_single,
+                                            )
+                                            await asyncio.sleep(e.retry_after + 1)
+                                        except Exception as exc2:
+                                            attempt_single += 1
+                                            last_exc_single = exc2
+                                            logger.warning(
+                                                "send.photo.retry user_id=%s err=%r attempt=%d/%d",
+                                                user_id,
+                                                exc2,
+                                                attempt_single,
+                                                retries_single,
+                                            )
+                                            await asyncio.sleep(2)
+                                    if last_exc_single is not None:
+                                        logger.error(
+                                            "send.photo.failed user_id=%s err=%r",
+                                            user_id,
+                                            last_exc_single,
+                                        )
+                                logger.error(
+                                    "send.media.failed user_id=%s err=%r group_size=%d",
+                                    user_id,
+                                    last_exc,
+                                    len(group),
+                                )
+                            # Optional small pause between groups to reduce pressure on Telegram API
+                            if SEND_GROUP_DELAY_MS > 0:
+                                await asyncio.sleep(SEND_GROUP_DELAY_MS / 1000.0)
 
                     await status.edit_text(f"✅ Готово. Надіслано {len(images)} зображень.")
                     data.update(
