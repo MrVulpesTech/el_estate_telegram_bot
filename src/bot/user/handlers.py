@@ -13,6 +13,8 @@ import json
 import os
 import shutil
 import time
+import random
+import random
 
 import redis.asyncio as aioredis
 from redis.exceptions import ReadOnlyError, ResponseError
@@ -211,6 +213,13 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
         async def _do_scrape_and_send() -> None:
             user_dir = ""
             try:
+                async def _sleep_with_jitter(base_s: float) -> None:
+                    try:
+                        jitter = base_s * 0.3
+                        await asyncio.sleep(max(0.05, base_s + random.uniform(-jitter, jitter)))
+                    except Exception:
+                        await asyncio.sleep(base_s)
+
                 images, user_dir = await scrape_images(
                     url, user_id, selenium_url, crop_percent=crop
                 )
@@ -247,7 +256,7 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
                                         attempt,
                                         retries,
                                     )
-                                    await asyncio.sleep(e.retry_after + 1)
+                                    await _sleep_with_jitter(e.retry_after + 1)
                                 except Exception as exc:
                                     attempt += 1
                                     last_exc = exc
@@ -258,7 +267,7 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
                                         attempt,
                                         retries,
                                     )
-                                    await asyncio.sleep(3)
+                                    await _sleep_with_jitter(2 + attempt)
                             if last_exc is not None:
                                 # Fallback: send images one-by-one with retries
                                 logger.warning(
@@ -292,7 +301,7 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
                                                 attempt_single,
                                                 retries_single,
                                             )
-                                            await asyncio.sleep(e.retry_after + 1)
+                                            await _sleep_with_jitter(e.retry_after + 1)
                                         except Exception as exc2:
                                             attempt_single += 1
                                             last_exc_single = exc2
@@ -303,13 +312,15 @@ def setup_user_router(redis: aioredis.Redis) -> Router:
                                                 attempt_single,
                                                 retries_single,
                                             )
-                                            await asyncio.sleep(2)
+                                            await _sleep_with_jitter(1.5 + 0.5 * attempt_single)
                                     if last_exc_single is not None:
                                         logger.error(
                                             "send.photo.failed user_id=%s err=%r",
                                             user_id,
                                             last_exc_single,
                                         )
+                                    # Small pacing even on success between photos
+                                    await asyncio.sleep(0.2)
                                 logger.error(
                                     "send.media.failed user_id=%s err=%r group_size=%d",
                                     user_id,
