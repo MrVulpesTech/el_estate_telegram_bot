@@ -1,6 +1,8 @@
 """
 Scraping and image processing service using remote Selenium and aiohttp.
 Extracts image URLs from OLX/Otodom, downloads images, and crops a bottom area.
+Changes: added multiple fallback selectors for otodom.pl to handle site structure changes;
+improved error logging to diagnose scraping failures.
 """
 
 import asyncio
@@ -78,24 +80,62 @@ def _browser_scrape(url: str, selenium_url: str) -> List[str]:
 
         image_urls: List[str] = []
         if "otodom" in url:
-            try:
-                WebDriverWait(driver, 8).until(
-                    EC.presence_of_element_located(
-                        (By.CSS_SELECTOR, "[data-testid='carousel-container']")
+            # Try multiple selectors as fallback (site structure may change)
+            selectors = [
+                ("[data-testid='carousel-container']", "carousel-container"),
+                ("[data-cy='adPhotosCarousel']", "adPhotosCarousel"),
+                (".css-1sw7q4x", "css-carousel"),
+                ("[class*='carousel']", "carousel-class"),
+            ]
+            found_images = False
+            for selector, name in selectors:
+                try:
+                    WebDriverWait(driver, 8).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
                     )
-                )
-                carousel = driver.find_element(
-                    By.CSS_SELECTOR, "[data-testid='carousel-container']"
-                )
-                for img in carousel.find_elements(By.TAG_NAME, "img"):
-                    src = img.get_attribute("src")
-                    if not src:
-                        continue
-                    if "/image;" in src:
-                        src = src.split("/image;")[0] + "/image;"
-                    image_urls.append(src)
-            except Exception as e:
-                logger.warning("otodom.extract.error url=%s err=%s", url, e)
+                    container = driver.find_element(By.CSS_SELECTOR, selector)
+                    for img in container.find_elements(By.TAG_NAME, "img"):
+                        src = img.get_attribute("src")
+                        if not src:
+                            continue
+                        # Handle both old and new image URL formats
+                        if "/image;" in src:
+                            src = src.split("/image;")[0] + "/image;"
+                        # Skip data URLs and placeholders
+                        if src.startswith("data:") or "placeholder" in src.lower():
+                            continue
+                        image_urls.append(src)
+                    if image_urls:
+                        logger.info("otodom.extract.success url=%s selector=%s count=%d", url, name, len(image_urls))
+                        found_images = True
+                        break
+                except Exception as e:
+                    logger.debug("otodom.extract.selector_failed url=%s selector=%s err=%s", url, name, e)
+                    continue
+            
+            # Fallback: try to find any images on the page if selectors fail
+            if not found_images:
+                try:
+                    logger.warning("otodom.extract.fallback url=%s", url)
+                    # Wait a bit more for page to fully load
+                    time.sleep(2)
+                    all_imgs = driver.find_elements(By.TAG_NAME, "img")
+                    for img in all_imgs:
+                        src = img.get_attribute("src")
+                        if not src or src.startswith("data:") or "placeholder" in src.lower():
+                            continue
+                        # Only include otodom CDN images
+                        if "otodom" in src or "apollo.olxcdn.com" in src:
+                            if "/image;" in src:
+                                src = src.split("/image;")[0] + "/image;"
+                            image_urls.append(src)
+                    if image_urls:
+                        logger.info("otodom.extract.fallback.success url=%s count=%d", url, len(image_urls))
+                except Exception as e:
+                    logger.warning("otodom.extract.fallback.error url=%s err=%s", url, e)
+            
+            if not image_urls:
+                logger.warning("otodom.extract.no_images url=%s", url)
         elif "olx" in url:
             try:
                 WebDriverWait(driver, 8).until(
