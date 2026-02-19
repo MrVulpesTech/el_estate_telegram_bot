@@ -2,7 +2,8 @@
 Scraping and image processing service using remote Selenium and aiohttp.
 Extracts image URLs from OLX/Otodom, downloads images, and crops a bottom area.
 Changes: added multiple fallback selectors for otodom.pl to handle site structure changes;
-improved error logging to diagnose scraping failures.
+improved error logging to diagnose scraping failures; limited concurrent scraping (SCRAPE_CONCURRENCY)
+to prevent Selenium overload and session timeouts.
 """
 
 import asyncio
