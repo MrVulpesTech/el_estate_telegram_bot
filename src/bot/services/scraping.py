@@ -34,7 +34,11 @@ SCRAPE_RETRY_BACKOFF_S = float(os.getenv("SCRAPE_RETRY_BACKOFF_S", "2.0"))
 IMAGE_FETCH_RETRIES = int(os.getenv("IMAGE_FETCH_RETRIES", "2"))
 IMAGE_FETCH_RETRY_BACKOFF_S = float(os.getenv("IMAGE_FETCH_RETRY_BACKOFF_S", "1.0"))
 
-_executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=10)
+# Limit concurrent browser sessions to prevent Selenium overload
+# Selenium standalone-chrome can handle ~2-3 concurrent sessions reliably
+SCRAPE_CONCURRENCY = max(1, int(os.getenv("SCRAPE_CONCURRENCY", "2")))
+_executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=SCRAPE_CONCURRENCY)
+_scrape_semaphore = asyncio.Semaphore(SCRAPE_CONCURRENCY)
 
 logger = logging.getLogger(__name__)
 
@@ -277,10 +281,12 @@ async def scrape_images(
     user_dir = f"images/{user_id}_{int(time.time())}"
     os.makedirs(user_dir, exist_ok=True)
 
-    loop = asyncio.get_running_loop()
-    image_urls = await loop.run_in_executor(
-        _executor, _browser_scrape_with_retry, url, selenium_url
-    )
+    # Limit concurrent scraping to prevent Selenium overload
+    async with _scrape_semaphore:
+        loop = asyncio.get_running_loop()
+        image_urls = await loop.run_in_executor(
+            _executor, _browser_scrape_with_retry, url, selenium_url
+        )
     if not image_urls:
         logger.warning("scrape.no_images user_id=%s url=%s", user_id, url)
         return [], user_dir
