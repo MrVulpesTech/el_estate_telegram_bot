@@ -1,8 +1,6 @@
 """
 Application entrypoint: initializes aiogram bot/dispatcher, Redis FSM storage,
 structured logging, health endpoint, routers, and graceful shutdown.
-Changes: custom aiohttp session with resilient connection settings (longer timeouts,
-connection pooling) to handle Telegram API connection resets.
 """
 
 import asyncio
@@ -19,7 +17,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode as AiogramParseMode
 from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiohttp import ClientSession, ClientTimeout, TCPConnector, web
+from aiohttp import ClientSession, ClientTimeout, web
 from redis.exceptions import ReadOnlyError, ResponseError
 
 from .bot.admin.commands import setup_admin_router
@@ -187,30 +185,8 @@ async def start() -> None:
         )
         storage = MemoryStorage()
 
-    # Configure Bot HTTP client with resilient connection settings
-    # Longer timeouts and connection pooling to handle network resets
-    tg_connect_timeout = int(os.getenv("TG_CONNECT_TIMEOUT_S", "15"))
-    tg_read_timeout = int(os.getenv("TG_READ_TIMEOUT_S", "60"))
-    tg_total_timeout = int(os.getenv("TG_TOTAL_TIMEOUT_S", "120"))
-    
-    connector = TCPConnector(
-        limit=100,
-        limit_per_host=10,
-        ttl_dns_cache=300,
-        force_close=False,  # Keep connections alive
-        enable_cleanup_closed=True,
-    )
-    timeout = ClientTimeout(
-        connect=tg_connect_timeout,
-        sock_read=tg_read_timeout,
-        total=tg_total_timeout,
-    )
-    bot_session = ClientSession(connector=connector, timeout=timeout)
-    
     bot = Bot(
-        token=bot_token,
-        session=bot_session,
-        default=DefaultBotProperties(parse_mode=AiogramParseMode.HTML),
+        token=bot_token, default=DefaultBotProperties(parse_mode=AiogramParseMode.HTML)
     )
     dp = Dispatcher(storage=storage)
 
@@ -339,9 +315,7 @@ async def start() -> None:
                 await polling_task
     finally:
         with suppress(Exception):
-            # Close bot's custom session if it exists
-            if hasattr(bot, "session") and bot.session:
-                await bot.session.close()
+            await bot.session.close()
         with suppress(Exception):
             await runner.cleanup()
         with suppress(Exception):
