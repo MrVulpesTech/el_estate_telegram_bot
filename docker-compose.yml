@@ -12,8 +12,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.5'
-          memory: 1.5G
+          cpus: '2'
+          memory: 2G
         reservations:
           cpus: '0.5'
           memory: 512M
@@ -34,6 +34,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SELENIUM_URL=http://selenium:4444/wd/hub
       - RATE_LIMIT_RPS=${RATE_LIMIT_RPS}
+      - SCRAPE_CONCURRENCY=1
       - HEALTH_PORT=8080
       - TECH_ADMIN_IDS=${TECH_ADMIN_IDS}
       - WHITELIST_JSON=${WHITELIST_JSON}

@@ -68,7 +68,7 @@ def _browser_scrape(url: str, selenium_url: str) -> List[str]:
 
         driver = webdriver.Remote(command_executor=selenium_url, options=options)
         try:
-            driver.set_page_load_timeout(15)
+            driver.set_page_load_timeout(30)
         except Exception:
             pass
         driver.get(url)
