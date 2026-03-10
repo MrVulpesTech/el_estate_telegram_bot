@@ -261,14 +261,18 @@ async def _process_image(
     user_dir: str,
     crop_percent: int,
 ) -> str:
-    content = await _fetch_image(session, img_url)
-    if not content:
+    try:
+        content = await _fetch_image(session, img_url)
+        if not content:
+            return ""
+        image_path = os.path.join(user_dir, f"image_{index+1}.png")
+        cropped_path = os.path.join(user_dir, f"cropped_image_{index+1}.png")
+        Image.open(BytesIO(content)).save(image_path)
+        _remove_watermark(image_path, cropped_path, crop_percent)
+        return cropped_path if os.path.exists(cropped_path) else image_path
+    except Exception as e:
+        logger.warning("process.image.error url=%s err=%s", img_url, e)
         return ""
-    image_path = os.path.join(user_dir, f"image_{index+1}.png")
-    cropped_path = os.path.join(user_dir, f"cropped_image_{index+1}.png")
-    Image.open(BytesIO(content)).save(image_path)
-    _remove_watermark(image_path, cropped_path, crop_percent)
-    return cropped_path if os.path.exists(cropped_path) else image_path
 
 
 async def scrape_images(
@@ -302,9 +306,9 @@ async def scrape_images(
             )
             for i, img_url in enumerate(image_urls)
         ]
-        processed = await asyncio.gather(*tasks)
+        processed = await asyncio.gather(*tasks, return_exceptions=True)
 
-    valid = [p for p in processed if p]
+    valid = [p for p in processed if p and isinstance(p, str)]
     logger.info(
         "scrape.done user_id=%s url=%s processed=%d/%d",
         user_id,
